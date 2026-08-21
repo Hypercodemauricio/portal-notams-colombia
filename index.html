@@ -1,0 +1,3399 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Colombia AIS / MET — Portal Aeronáutico</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fragment+Mono&family=Geist:wght@300..800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+
+/* ═══════════════════════════════════════════════════════════════
+   COLOMBIA AIS / MET — Sistema visual
+   Base oscura sobria (ref. produx.design) + acento azul (ref. air.inc)
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+    /* ── Superficies ── */
+    --bg:            #0B0D10;
+    --bg-deep:       #07090B;
+    --surface:       #121519;
+    --surface-2:     #171B21;
+    --surface-3:     #1D222A;
+
+    /* ── Bordes ── */
+    --line:          rgba(255,255,255,0.07);
+    --line-strong:   rgba(255,255,255,0.13);
+    --line-accent:   rgba(46,143,255,0.35);
+
+    /* ── Texto ── */
+    --text:          #E8EAED;
+    --text-2:        #A8B0BC;
+    /* Antes #6E7783 y #464D57. Medidos sobre el video daban 4.0:1 y 2.2:1,
+       por debajo del 4.5:1 que pide AA para texto pequeno, que es
+       justamente el tamano en el que se usan. */
+    --text-3:        #8F98A6;
+    --text-4:        #828C99;
+
+    /* ── Acento (air.inc) ── */
+    --accent:        #2E8FFF;
+    --accent-hi:     #63ACFF;
+    --accent-lo:     #1B6FD6;
+    --accent-a08:    rgba(46,143,255,0.08);
+    --accent-a16:    rgba(46,143,255,0.16);
+    --accent-a30:    rgba(46,143,255,0.30);
+
+    /* ── Estados operativos ── */
+    --ok:            #3DDC97;
+    --ok-a12:        rgba(61,220,151,0.12);
+    --warn:          #F5A524;
+    --warn-a12:      rgba(245,165,36,0.12);
+    --danger:        #FF6B6B;
+    --danger-a12:    rgba(255,107,107,0.12);
+
+    /* ── Movimiento ──
+       Curvas tomadas de air.inc: salida quíntica para lo general,
+       rebote contenido para elementos que "aterrizan". */
+    --ease:          cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-inout:    cubic-bezier(0.65, 0, 0.35, 1);
+    --ease-spring:   cubic-bezier(0.34, 1.75, 0.64, 1);
+    --t-xs:          0.14s;
+    --t-sm:          0.24s;
+    --t-md:          0.38s;
+    --t-lg:          0.62s;
+    --t-xl:          0.85s;
+
+    /* ── Radios ── */
+    --r-xs:          4px;
+    --r-sm:          8px;
+    --r-md:          12px;
+    --r-lg:          16px;
+    --r-pill:        999px;
+
+    /* ── Tipografía ── */
+    /* Geist es la familia de alethia.earth. A diferencia de Archivo no
+       tiene eje de ancho (wdth): el caracter viene del tracking cerrado
+       y del interlineado, no de estirar la letra. */
+    /* La barra superior es translucida y deja pasar el video: el gris de
+       las pestanas inactivas necesita su propio token para que el tema
+       claro pueda cambiarlo. */
+    --text-nav:      #98A1AE;
+
+    --font-ui:       'Geist', 'Inter', 'Helvetica Neue', Arial, sans-serif;
+    --font-mono:     'Fragment Mono', 'JetBrains Mono', ui-monospace, monospace;
+
+    /* ── Sombras ── */
+    --shadow-sm:     0 1px 2px rgba(0,0,0,0.4);
+    --shadow-md:     0 8px 24px -8px rgba(0,0,0,0.7);
+    --shadow-lg:     0 24px 60px -12px rgba(0,0,0,0.8);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+::selection { background: var(--accent-a30); color: #fff; }
+
+html { scroll-behavior: smooth; }
+
+html, body {
+    font-family: var(--font-ui);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: 'tnum' 1;
+}
+
+/* ═══════════════ FONDO ═══════════════ */
+/* El fondo era un pase de siete fotos incrustadas en base64 dentro de este
+   mismo archivo: 442 KB que el navegador volvia a descargar en cada visita,
+   porque un HTML con datos en vivo no se puede cachear. Ahora es un video de
+   344 KB servido desde /static, que si se cachea.
+   El poster va debajo y cubre los dos casos en que no hay video: mientras
+   carga, y cuando el sistema pide menos movimiento. */
+.bg-poster,
+.bg-video {
+    position: fixed; inset: 0; z-index: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    pointer-events: none;
+    /* Misma intencion que tenian las fotos: atmosfera, no protagonismo. */
+    filter: saturate(0.9) brightness(0.95) contrast(1.04);
+}
+.bg-poster {
+    background: var(--bg) url('/static/hero-nubes-poster.jpg') center / cover no-repeat;
+}
+.bg-video {
+    opacity: 0;
+    transform: scale(1.04);
+    transition: opacity 1.8s var(--ease), transform 14s linear;
+}
+/* Solo aparece cuando ya tiene fotogramas, para que no se vea el salto. */
+.bg-video.listo { opacity: 1; transform: scale(1); }
+
+@media (prefers-reduced-motion: reduce) {
+    .bg-video { display: none; }
+}
+
+.bg-overlay {
+    position: fixed; inset: 0; z-index: 1;
+    background:
+        radial-gradient(120% 80% at 15% 0%, rgba(46,143,255,0.10) 0%, transparent 55%),
+        /* Antes arrancaba en 0.86 y el fondo quedaba practicamente invisible.
+           Con una foto fija daba igual; con video, taparlo es tirarlo a la
+           basura. Ahora la franja del hero deja ver el movimiento y de ahi
+           hacia abajo cierra a opaco, que es donde empiezan las tarjetas y el
+           texto no debe competir con nada. */
+        linear-gradient(to bottom,
+            rgba(11,13,16,0.42) 0%,
+            rgba(11,13,16,0.58) 30%,
+            rgba(11,13,16,0.88) 55%,
+            var(--bg) 78%);
+}
+
+/* Scanlines eliminadas; en su lugar, malla técnica muy tenue (ref. produx) */
+.bg-scanlines {
+    position: fixed; inset: 0; z-index: 2; pointer-events: none;
+    background-image:
+        linear-gradient(rgba(255,255,255,0.016) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.016) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(120% 100% at 50% 0%, #000 25%, transparent 85%);
+    -webkit-mask-image: radial-gradient(120% 100% at 50% 0%, #000 25%, transparent 85%);
+}
+
+#app { position: relative; z-index: 10; min-height: 100vh; display: flex; flex-direction: column; }
+
+/* ═══════════════ NAVBAR ═══════════════ */
+.navbar {
+    position: sticky; top: 0; z-index: 200;
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    background: rgba(11,13,16,0.72);
+    border-bottom: 1px solid var(--line);
+    padding: 0 2rem;
+    transition: background var(--t-md) var(--ease), border-color var(--t-md) var(--ease);
+}
+.navbar.is-scrolled {
+    background: rgba(7,9,11,0.92);
+    border-bottom-color: var(--line-strong);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.03), 0 12px 32px -16px rgba(0,0,0,0.9);
+}
+.navbar-inner {
+    max-width: 1440px; margin: 0 auto;
+    display: flex; align-items: center; justify-content: space-between;
+    height: 72px; gap: 1.5rem; flex-wrap: wrap;
+}
+
+/* ── Marca ── */
+.brand { display: flex; align-items: center; gap: 13px; text-decoration: none; }
+.brand-emblem {
+    width: 38px; height: 38px; border-radius: var(--r-sm); flex-shrink: 0;
+    background: linear-gradient(150deg, var(--accent) 0%, var(--accent-lo) 100%);
+    display: flex; align-items: center; justify-content: center;
+    position: relative; overflow: hidden;
+    box-shadow: 0 4px 14px -4px rgba(46,143,255,0.6), inset 0 1px 0 rgba(255,255,255,0.22);
+    transition: transform var(--t-md) var(--ease-spring), box-shadow var(--t-md) var(--ease);
+}
+.brand:hover .brand-emblem {
+    transform: translateY(-2px) rotate(-6deg);
+    box-shadow: 0 8px 22px -4px rgba(46,143,255,0.75), inset 0 1px 0 rgba(255,255,255,0.3);
+}
+.brand-emblem::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(150deg, rgba(255,255,255,0.22) 0%, transparent 55%);
+}
+.brand-name {
+    font-family: var(--font-ui);
+    font-weight: 600; font-size: 0.92rem;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--text); line-height: 1.15;
+}
+.brand-sub {
+    font-family: var(--font-mono);
+    font-size: 0.6rem; color: var(--text-3);
+    letter-spacing: 0.14em; margin-top: 3px;
+    transition: color var(--t-sm) var(--ease);
+}
+.brand:hover .brand-sub { color: var(--accent); }
+
+/* ── Pestañas: etiqueta mono entre corchetes + indicador deslizante ── */
+.tab-rail {
+    display: flex; gap: 2px; position: relative;
+    background: rgba(255,255,255,0.035);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md); padding: 4px;
+}
+.tab-indicator {
+    position: absolute; top: 4px; left: 0; height: calc(100% - 8px);
+    border-radius: var(--r-sm);
+    /* Antes llevaba degradado y un resplandor de 16px. El selector de la
+       referencia es mate: un relleno plano y un borde de un pixel. */
+    background: var(--accent-a16);
+    border: 1px solid var(--line-accent);
+    /* El indicador viaja entre pestañas: una sola transición compartida. */
+    transition: transform var(--t-lg) var(--ease), width var(--t-lg) var(--ease), opacity var(--t-sm) var(--ease);
+    pointer-events: none; z-index: 0; opacity: 0;
+}
+.tab-indicator.ready { opacity: 1; }
+.tab-btn {
+    position: relative; z-index: 1;
+    padding: 9px 20px; border-radius: var(--r-sm);
+    font-family: var(--font-mono);
+    font-weight: 400; font-size: 0.66rem;
+    letter-spacing: 0.15em; text-transform: uppercase;
+    color: var(--text-nav); border: none; cursor: pointer;
+    background: transparent; white-space: nowrap;
+    transition: color var(--t-sm) var(--ease);
+}
+/* Los corchetes [ ] eran un guino a produx.design, la referencia anterior.
+   El selector de Fuselab (3D VIEW / SYSTEM / SCHEMATIC) es plano: la
+   pestana activa se distingue por el fondo y no por adornos alrededor del
+   texto. Se quitan para no mezclar dos idiomas distintos. */
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: #fff; }
+
+/* ═══════════════ HERO ═══════════════ */
+.hero-strip { padding: 60px 2rem 8px; max-width: 1440px; margin: 0 auto; width: 100%; }
+/* El titulo anterior era lo contrario de esto: peso 900, ancho maximo,
+   mayusculas e inclinado. alethia.earth consigue su presencia al reves,
+   con peso medio y el tracking muy cerrado (-0.05em, medido en su hero).
+   Tres consecuencias practicas del cambio:
+     * Sin mayusculas, los acentos del espanol vuelven a ser visibles como
+       tales y el interlineado puede bajar a 0.95 sin que choquen.
+     * Geist no tiene eje de ancho, asi que no hay nada que estirar.
+     * Se va la inclinacion: en la referencia el bloque esta a plomo. */
+.hero-title {
+    display: block;
+    font-family: var(--font-ui);
+    font-weight: 500;
+    font-size: clamp(2.3rem, 6.4vw, 5.6rem);
+    line-height: 0.95;
+    letter-spacing: -0.05em;
+    color: #F5F4F2;
+    max-width: 20ch;
+}
+/* A peso 500 un degradado sobre el texto se ensucia en los trazos finos:
+   el acento va en color plano. */
+.hero-title span { color: var(--accent-hi); }
+/* ── Franja de telemetria ──
+   Antes era una linea de cuatro etiquetas sueltas, todas del mismo tamano
+   y del mismo gris: habia que leerlas enteras para saber que decian. El
+   panel de Fuselab separa cada dato en dos alturas -que es y cuanto vale-
+   y los divide con una linea de un pixel, que es lo que hace que se lea
+   de un vistazo. */
+.hero-kpis {
+    display: flex; margin-top: 34px; flex-wrap: wrap;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    background: rgba(7,9,11,0.55);
+    backdrop-filter: blur(10px) saturate(120%);
+    -webkit-backdrop-filter: blur(10px) saturate(120%);
+}
+.kpi {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 13px 26px 13px 0;
+    margin-right: 26px;
+    border-right: 1px solid var(--line);
+    transition: border-color var(--t-md) var(--ease);
+}
+.kpi:last-child { border-right: none; margin-right: 0; padding-right: 0; }
+.kpi:hover { border-right-color: var(--line-strong); }
+.kpi-lbl {
+    font-family: var(--font-mono); font-size: 0.54rem;
+    letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--text-3);
+    transition: color var(--t-sm) var(--ease);
+}
+.kpi:hover .kpi-lbl { color: var(--text-2); }
+.kpi-val {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--font-mono); font-size: 0.78rem;
+    letter-spacing: 0.03em; color: var(--text-2);
+    transition: color var(--t-sm) var(--ease);
+}
+.kpi:hover .kpi-val { color: var(--text); }
+.kpi-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+    position: relative;
+}
+.kpi-dot::after {
+    content: ''; position: absolute; inset: -4px; border-radius: 50%;
+    background: currentColor; opacity: 0.18;
+    animation: haloPulse 2.8s var(--ease-inout) infinite;
+}
+.kpi-dot.green { background: var(--ok);   color: var(--ok); }
+.kpi-dot.sky   { background: var(--accent); color: var(--accent); }
+.kpi-dot.amber { background: var(--warn); color: var(--warn); }
+@keyframes haloPulse { 0%,100% { transform: scale(1); opacity: 0.18; } 50% { transform: scale(1.6); opacity: 0; } }
+@keyframes blink { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.45 } }
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+
+/* ═══════════════ MAIN ═══════════════ */
+main { flex: 1; max-width: 1440px; margin: 0 auto; padding: 36px 2rem 3rem; width: 100%; }
+
+/* ═══════════════ TARJETAS ═══════════════ */
+.card {
+    position: relative;
+    background: rgba(18,21,25,0.82);
+    backdrop-filter: blur(16px) saturate(130%);
+    -webkit-backdrop-filter: blur(16px) saturate(130%);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    transition: border-color var(--t-md) var(--ease),
+                transform var(--t-md) var(--ease),
+                box-shadow var(--t-md) var(--ease);
+}
+/* Resplandor que sigue al cursor: --mx/--my las escribe el JS */
+.card::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(340px circle at var(--mx, 50%) var(--my, 0%),
+                rgba(46,143,255,0.09), transparent 62%);
+    opacity: 0; transition: opacity var(--t-md) var(--ease);
+}
+.card:hover { border-color: var(--line-strong); transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.card:hover::after { opacity: 1; }
+
+/* Barra de estado lateral, animada al entrar el cursor */
+.card-glow-green, .card-glow-sky, .card-glow-orange { position: relative; }
+.card-glow-green::before, .card-glow-sky::before, .card-glow-orange::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+    transform-origin: top; transform: scaleY(0.28);
+    transition: transform var(--t-lg) var(--ease), box-shadow var(--t-md) var(--ease);
+    z-index: 2;
+}
+.card-glow-green:hover::before, .card-glow-sky:hover::before, .card-glow-orange:hover::before { transform: scaleY(1); }
+.card-glow-green::before  { background: var(--ok);     box-shadow: 0 0 16px rgba(61,220,151,0.5); }
+.card-glow-sky::before    { background: var(--accent); box-shadow: 0 0 16px rgba(46,143,255,0.5); }
+.card-glow-orange::before { background: var(--warn);   box-shadow: 0 0 16px rgba(245,165,36,0.5); }
+
+/* ═══════════════ FORMULARIOS ═══════════════ */
+.field-label {
+    display: block; font-family: var(--font-mono);
+    font-size: 0.6rem; font-weight: 400;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--text-3); margin-bottom: 10px;
+}
+#icaoInput {
+    width: 100%; padding: 18px 20px;
+    background: var(--bg-deep);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md); outline: none;
+    font-family: var(--font-mono);
+    font-size: 2rem; font-weight: 500;
+    color: var(--text); text-transform: uppercase;
+    letter-spacing: 0.08em; caret-color: var(--accent);
+    transition: border-color var(--t-sm) var(--ease),
+                box-shadow var(--t-md) var(--ease),
+                background var(--t-sm) var(--ease);
+}
+#icaoInput::placeholder { color: var(--text-4); }
+#icaoInput:hover { border-color: var(--line-strong); }
+#icaoInput:focus {
+    border-color: var(--accent);
+    background: #05070A;
+    box-shadow: 0 0 0 4px var(--accent-a08), 0 0 28px -8px rgba(46,143,255,0.5);
+}
+
+/* Barra de búsqueda de NOTAMs */
+.notam-search-bar {
+    background: rgba(255,255,255,0.025);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    padding: 18px 20px;
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end;
+    transition: border-color var(--t-md) var(--ease), background var(--t-md) var(--ease);
+}
+.notam-search-bar:focus-within { border-color: var(--line-accent); background: rgba(46,143,255,0.03); }
+.notam-search-input {
+    width: 100%; padding: 13px 16px;
+    background: var(--bg-deep);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    font-family: var(--font-mono); font-size: 1rem;
+    color: var(--text); outline: none; text-transform: uppercase;
+    letter-spacing: 0.04em;
+    transition: border-color var(--t-sm) var(--ease), box-shadow var(--t-md) var(--ease);
+}
+.notam-search-input::placeholder { color: var(--text-4); text-transform: none; letter-spacing: 0; }
+.notam-search-input:hover { border-color: var(--line-strong); }
+.notam-search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-a08); }
+.notam-search-icon { color: var(--text-3); }
+
+/* ═══════════════ BOTONES ═══════════════ */
+.btn {
+    position: relative; overflow: hidden;
+    width: 100%; padding: 15px 20px; border: 1px solid transparent;
+    border-radius: var(--r-md);
+    font-family: var(--font-mono); font-weight: 500;
+    font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    transition: transform var(--t-sm) var(--ease-spring),
+                box-shadow var(--t-md) var(--ease),
+                border-color var(--t-sm) var(--ease),
+                background var(--t-sm) var(--ease);
+}
+/* El barrido de luz blanca que cruzaba el boton se elimina: funcionaba
+   sobre el relleno solido anterior, pero sobre un boton contorneado deja
+   ver la banda contra el fondo y se nota el truco. */
+.btn > * { position: relative; z-index: 1; }
+.btn:active { transform: scale(0.975); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* El boton de alethia.earth: caja contorneada, texto claro y un cuadrado
+   redondeado de color con una flecha al final. El peso visual lo lleva ese
+   bloque de acento y no todo el rectangulo, que era lo de antes. */
+.btn-primary {
+    background: rgba(255,255,255,0.02);
+    border-color: var(--line-strong);
+    color: var(--text);
+    padding: 9px 9px 9px 20px;
+}
+.btn-primary .btn-flecha {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; flex-shrink: 0;
+    border-radius: var(--r-sm);
+    background: var(--accent); color: #071018;
+    transition: transform var(--t-md) var(--ease-spring),
+                background var(--t-sm) var(--ease);
+}
+.btn-primary:hover {
+    border-color: var(--accent);
+    background: var(--accent-a08);
+    transform: translateY(-2px);
+}
+.btn-primary:hover .btn-flecha { background: var(--accent-hi); transform: translateX(3px); }
+.btn-primary:active { transform: translateY(0) scale(0.985); }
+
+.btn-danger {
+    background: transparent; color: var(--danger);
+    border-color: rgba(255,107,107,0.3); margin-top: 10px;
+    /* .btn reparte con space-between por el boton principal; este sigue
+       siendo icono + texto y va centrado. */
+    justify-content: center;
+}
+.btn-danger:hover {
+    background: var(--danger-a12); border-color: var(--danger);
+    transform: translateY(-2px); box-shadow: 0 10px 26px -10px rgba(255,107,107,0.55);
+}
+.btn-danger:active { transform: translateY(0) scale(0.975); }
+
+/* Botón naranja de la búsqueda NOTAM */
+.btn-notam {
+    position: relative; overflow: hidden;
+    height: 49px; padding: 0 30px;
+    background: linear-gradient(180deg, var(--warn) 0%, #D98B12 100%);
+    border: none; border-radius: var(--r-sm); color: #1A1206;
+    font-family: var(--font-mono); font-size: 0.72rem; font-weight: 500;
+    letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer;
+    display: flex; align-items: center; gap: 9px;
+    box-shadow: 0 6px 18px -8px rgba(245,165,36,0.8), inset 0 1px 0 rgba(255,255,255,0.28);
+    transition: transform var(--t-sm) var(--ease-spring), box-shadow var(--t-md) var(--ease);
+}
+.btn-notam::before {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.35) 50%, transparent 70%);
+    transform: translateX(-120%); transition: transform var(--t-xl) var(--ease);
+}
+.btn-notam:hover::before { transform: translateX(120%); }
+.btn-notam:hover { transform: translateY(-2px); box-shadow: 0 12px 28px -8px rgba(245,165,36,0.95); }
+.btn-notam:active { transform: translateY(0) scale(0.975); }
+.btn-notam > * { position: relative; z-index: 1; }
+
+/* Botones "BOT / ANALIZAR" generados por JS */
+.btn-ia {
+    background: transparent; color: var(--accent);
+    border: 1px solid var(--line-accent);
+    padding: 7px 13px; border-radius: var(--r-xs);
+    font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.08em;
+    cursor: pointer; white-space: nowrap;
+    transition: background var(--t-sm) var(--ease), color var(--t-sm) var(--ease),
+                border-color var(--t-sm) var(--ease), transform var(--t-sm) var(--ease-spring);
+}
+.btn-ia:hover { background: var(--accent); color: #fff; border-color: var(--accent); transform: translateY(-1px); }
+.btn-ia:active { transform: scale(0.95); }
+.btn-ia.ia-ok  { color: var(--ok);   border-color: rgba(61,220,151,0.35); }
+.btn-ia.ia-ok:hover  { background: var(--ok);   color: #05130D; border-color: var(--ok); }
+
+/* Enlace externo con flecha que se desplaza */
+.ext-link {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 15px; border-radius: var(--r-sm); text-decoration: none;
+    background: transparent; border: 1px solid var(--line);
+    font-family: var(--font-mono);
+    font-size: 0.64rem; letter-spacing: 0.1em;
+    color: var(--text-2); text-transform: uppercase;
+    transition: background var(--t-sm) var(--ease), border-color var(--t-sm) var(--ease),
+                color var(--t-sm) var(--ease), transform var(--t-sm) var(--ease);
+}
+.ext-link svg { transition: transform var(--t-md) var(--ease-spring); }
+.ext-link:hover {
+    background: var(--accent-a08); border-color: var(--line-accent);
+    color: var(--accent); transform: translateX(3px);
+}
+.ext-link:hover svg { transform: translate(3px, -3px); }
+
+/* ═══════════════ ETIQUETAS ═══════════════ */
+.badge {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--font-mono);
+    font-size: 0.6rem; font-weight: 400; letter-spacing: 0.11em;
+    text-transform: uppercase; padding: 5px 12px; border-radius: var(--r-xs);
+    transition: background var(--t-sm) var(--ease);
+}
+.badge-green  { background: var(--ok-a12);     color: var(--ok);     border: 1px solid rgba(61,220,151,0.22); }
+.badge-sky    { background: var(--accent-a08); color: var(--accent); border: 1px solid var(--line-accent); }
+.badge-orange { background: var(--warn-a12);   color: var(--warn);   border: 1px solid rgba(245,165,36,0.22); }
+.badge-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: blink 2.4s var(--ease-inout) infinite; }
+
+/* ═══════════════ TERMINAL ═══════════════ */
+.terminal {
+    background: var(--bg-deep);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md); padding: 22px 24px;
+    font-family: var(--font-mono);
+    font-size: 0.84rem; line-height: 1.85;
+    min-height: 64px; position: relative;
+    transition: border-color var(--t-md) var(--ease);
+}
+.terminal::before {
+    content: ''; position: absolute; top: -1px; left: 24px; right: 24px; height: 1px;
+    background: linear-gradient(90deg, transparent, currentColor, transparent);
+    opacity: 0.35;
+}
+.terminal:hover { border-color: var(--line-strong); }
+.terminal-green { color: var(--ok); }
+.terminal strong { font-weight: 500; }
+.terminal-blue  { color: var(--accent-hi); }
+
+.shimmer {
+    height: 3px; border-radius: 2px; width: 100%;
+    background: linear-gradient(90deg, transparent 0%, var(--accent) 50%, transparent 100%);
+    background-size: 200%; animation: shimmer 1.5s linear infinite;
+    margin-bottom: 12px;
+}
+@keyframes shimmer { 0% { background-position: 200% } 100% { background-position: -200% } }
+
+/* ═══════════════ TARJETAS METAR DECODIFICADO ═══════════════ */
+.met-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin-top: 18px; }
+.met-card {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm); padding: 16px 14px; text-align: center;
+    position: relative; overflow: hidden;
+    transition: border-color var(--t-sm) var(--ease), transform var(--t-md) var(--ease-spring),
+                background var(--t-sm) var(--ease);
+}
+.met-card::before {
+    content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
+    background: var(--accent); transform: scaleX(0); transform-origin: left;
+    transition: transform var(--t-md) var(--ease);
+}
+.met-card:hover { border-color: var(--line-strong); background: var(--surface-3); transform: translateY(-3px); }
+.met-card:hover::before { transform: scaleX(1); }
+/* Cifra grande con la unidad atenuada al lado, como el 84.2 % del panel
+   de Fuselab: el numero manda y la unidad acompana sin competir. */
+.met-val   { font-family: var(--font-ui); font-size: 1.72rem; font-weight: 500; color: #fff; letter-spacing: -0.035em; line-height: 1; }
+.met-unit  { font-family: var(--font-mono); font-size: 0.62rem; color: var(--text-4); letter-spacing: 0.08em; text-transform: uppercase; margin-left: 2px; }
+.met-label { font-family: var(--font-mono); font-size: 0.58rem; color: var(--accent); letter-spacing: 0.12em; text-transform: uppercase; margin-top: 6px; }
+
+/* ═══════════════ ESTADO VACÍO ═══════════════ */
+.empty-state {
+    min-height: 380px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    border: 1px dashed var(--line-strong); border-radius: var(--r-lg);
+    background: rgba(7,9,11,0.35);
+    color: var(--text-3);
+    transition: border-color var(--t-md) var(--ease), color var(--t-md) var(--ease);
+}
+.empty-state:hover { border-color: var(--line-accent); color: var(--text-2); }
+.empty-state p {
+    font-family: var(--font-mono); font-size: 0.68rem;
+    letter-spacing: 0.14em; text-transform: uppercase; margin-top: 18px;
+    max-width: 320px; text-align: center; line-height: 1.7;
+}
+
+/* ═══════════════ TABLAS ═══════════════ */
+.data-table { width: 100%; border-collapse: collapse; }
+.data-table thead th {
+    padding: 14px 20px; text-align: left;
+    background: rgba(7,9,11,0.6);
+    font-family: var(--font-mono);
+    font-size: 0.6rem; font-weight: 400; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--text-3); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; backdrop-filter: blur(8px);
+}
+.data-table tbody tr {
+    border-bottom: 1px solid var(--line);
+    transition: background var(--t-sm) var(--ease);
+}
+.data-table tbody tr:last-child { border-bottom: none; }
+/* Marca lateral que crece al pasar el cursor por la fila */
+.data-table tbody td:first-child { position: relative; }
+.data-table tbody td:first-child::before {
+    content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px;
+    background: var(--accent); border-radius: 2px;
+    transform: scaleY(0); transform-origin: center;
+    transition: transform var(--t-md) var(--ease);
+}
+.data-table tbody tr:hover { background: rgba(255,255,255,0.028); }
+.data-table tbody tr:hover td:first-child::before { transform: scaleY(1); }
+.data-table td { padding: 15px 20px; font-size: 0.86rem; vertical-align: top; color: var(--text-2); line-height: 1.7; }
+
+.icao-tag { font-family: var(--font-mono); font-weight: 500; color: var(--accent); font-size: 0.92rem; letter-spacing: 0.05em; }
+.notam-id-tag { font-family: var(--font-mono); font-weight: 500; color: var(--warn); letter-spacing: 0.04em; }
+.notam-aero-chip {
+    display: inline-block; background: var(--warn-a12);
+    color: var(--warn); border: 1px solid rgba(245,165,36,0.2);
+    padding: 2px 9px; border-radius: var(--r-xs);
+    font-family: var(--font-mono); font-size: 0.6rem;
+    letter-spacing: 0.08em; text-transform: uppercase; margin-right: 6px;
+}
+.notam-ts { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-4); }
+.count-pill {
+    font-family: var(--font-mono); font-size: 0.72rem;
+    background: var(--surface-2); border: 1px solid var(--line);
+    color: var(--text-2);
+    padding: 6px 16px; border-radius: var(--r-pill);
+}
+.elev-tag { font-family: var(--font-mono); color: var(--accent); font-size: 0.84rem; }
+.data-table td.city-sub { color: var(--text-3); }
+.data-table td.ad-horario { font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-2); }
+/* El texto crudo de un NOTAM es telegrafico: la monoespaciada lo hace
+   legible en bloque y coincide con como se lee en un boletin AIS. */
+.data-table td.notam-body {
+    font-family: var(--font-mono); font-size: 0.76rem;
+    line-height: 1.85; color: var(--text-2); letter-spacing: 0.005em;
+}
+
+/* Aviso de aeródromo cerrado */
+.ad-alert {
+    display: inline-block; margin-top: 6px;
+    background: var(--danger-a12); color: var(--danger);
+    border: 1px solid rgba(255,107,107,0.28);
+    font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.06em;
+    padding: 3px 9px; border-radius: var(--r-xs); cursor: help;
+    animation: blink 2.6s var(--ease-inout) infinite;
+}
+
+/* ═══════════════ BUSCADOR DE AERÓDROMOS ═══════════════ */
+.search-wrap { position: relative; }
+.search-wrap svg {
+    position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+    color: var(--text-4); pointer-events: none;
+    transition: color var(--t-sm) var(--ease);
+}
+.search-wrap:focus-within svg { color: var(--accent); }
+.search-wrap input {
+    width: 100%; padding: 11px 14px 11px 40px;
+    background: var(--bg-deep); border: 1px solid var(--line);
+    border-radius: var(--r-sm); color: var(--text); outline: none;
+    font-family: var(--font-mono); font-size: 0.8rem;
+    transition: border-color var(--t-sm) var(--ease), box-shadow var(--t-md) var(--ease);
+}
+.search-wrap input::placeholder { color: var(--text-4); }
+.search-wrap input:hover { border-color: var(--line-strong); }
+.search-wrap input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-a08); }
+
+/* ── Aviso de cierre en el directorio de aeródromos ──
+   El aviso decia "AD CLSD VIGENTE (D0446/26)" y el title del navegador
+   repetia el mismo numero. Para saber de que iba el cierre habia que
+   irse a la pestana de NOTAMs y buscarlo. Ahora el texto viene al aviso. */
+.ad-alert-wrap { position: relative; display: inline-block; }
+/* El globo de cada fila no se muestra: solo guarda su contenido. El que se
+   ve es #adTip, que cuelga de <body>.
+
+   Razon: la tarjeta lleva overflow:hidden -que lo recortaba- y ademas
+   backdrop-filter, que convierte a la tarjeta en el marco de referencia de
+   sus descendientes position:fixed. Un globo fijo colocado en coordenadas
+   de ventana acababa 440 px mas abajo y fuera de la pantalla. Colgando de
+   <body> no hay ningun ancestro que lo recorte ni que le cambie el origen. */
+.ad-tip { display: none; }
+
+#adTip {
+    position: fixed; z-index: 200; display: block;
+    width: min(460px, 74vw); padding: 14px 16px;
+    background: var(--bg-deep);
+    border: 1px solid var(--line-accent);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-lg);
+    opacity: 0; visibility: hidden; transform: translateY(-6px);
+    transition: opacity var(--t-sm) var(--ease),
+                transform var(--t-md) var(--ease),
+                visibility var(--t-sm);
+    text-align: left; white-space: normal; pointer-events: none;
+}
+#adTip.visible { opacity: 1; visibility: visible; transform: translateY(0); }
+.ad-tip-item + .ad-tip-item { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.ad-tip-id {
+    font-family: var(--font-mono); font-size: 0.58rem;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--danger);
+}
+.ad-tip-txt {
+    font-family: var(--font-mono); font-size: 0.7rem; line-height: 1.65;
+    color: var(--text); margin-top: 7px; word-break: break-word;
+}
+.ad-tip-vig {
+    font-family: var(--font-mono); font-size: 0.56rem;
+    color: var(--text-3); margin-top: 8px; letter-spacing: 0.06em;
+}
+.ad-sin-horario { color: var(--text-4); }
+
+/* ═══════════════ CIERRES Y RESTRICCIONES ═══════════════ */
+/* Antes habia que buscar "CLSD" a mano en la pestana de NOTAMs, y luego
+   "LTD", y luego acordarse de mirar los FIR. Esta vista aplica el criterio
+   entero de una vez y separa lo que cierra de lo que solo limita. */
+.cie-resumen {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px; background: var(--line);
+    border-bottom: 1px solid var(--line);
+}
+.cie-dato { background: var(--surface); padding: 16px 20px; }
+.cie-dato-val {
+    font-family: var(--font-ui); font-size: 1.7rem; font-weight: 500;
+    letter-spacing: -0.035em; line-height: 1; color: #fff;
+}
+.cie-dato-val.grave { color: var(--danger); }
+.cie-dato-lbl {
+    font-family: var(--font-mono); font-size: 0.54rem; margin-top: 7px;
+    letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-3);
+}
+
+.cie-filtros { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px 20px; }
+.cie-filtro {
+    font-family: var(--font-mono); font-size: 0.6rem;
+    letter-spacing: 0.13em; text-transform: uppercase;
+    padding: 8px 14px; cursor: pointer;
+    background: transparent; color: var(--text-3);
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+    transition: color var(--t-sm) var(--ease), border-color var(--t-sm) var(--ease),
+                background var(--t-sm) var(--ease);
+}
+.cie-filtro:hover { color: var(--text); border-color: var(--line-strong); }
+.cie-filtro.on { color: #fff; border-color: var(--line-accent); background: var(--accent-a16); }
+
+/* ── Buscador de Reglamentos Aeronauticos (RAC) ─────────────────────────── */
+.rac-buscador { padding: 20px; border-bottom: 1px solid var(--line); }
+.rac-fila-busq { display: flex; gap: 10px; flex-wrap: wrap; }
+.rac-input {
+    flex: 1 1 320px; min-width: 0;
+    padding: 14px 16px; font-size: 0.92rem; font-family: inherit;
+    color: var(--text); background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+    transition: border-color var(--t-sm) var(--ease);
+}
+.rac-input:focus { outline: none; border-color: var(--line-accent); }
+.rac-input::placeholder { color: var(--text-4); }
+.rac-sel {
+    padding: 14px 12px; font-family: var(--font-mono); font-size: 0.72rem;
+    letter-spacing: 0.06em; color: var(--text-2); background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: var(--r-sm); cursor: pointer;
+    max-width: 230px;
+}
+.rac-btn {
+    padding: 14px 22px; cursor: pointer;
+    font-family: var(--font-mono); font-size: 0.64rem;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: #fff; background: var(--accent-a16);
+    border: 1px solid var(--line-accent); border-radius: var(--r-sm);
+    transition: background var(--t-sm) var(--ease);
+}
+.rac-btn:hover { background: var(--accent-a28, rgba(60,130,246,0.28)); }
+.rac-btn[disabled] { opacity: 0.5; cursor: wait; }
+.rac-opciones {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    margin-top: 14px; font-size: 0.76rem; color: var(--text-3);
+}
+.rac-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.rac-ejemplos { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.rac-ej {
+    font-size: 0.72rem; padding: 6px 12px; cursor: pointer;
+    color: var(--text-3); background: transparent;
+    border: 1px solid var(--line); border-radius: 100px;
+    transition: color var(--t-sm) var(--ease), border-color var(--t-sm) var(--ease);
+}
+.rac-ej:hover { color: var(--text); border-color: var(--line-strong); }
+
+.rac-ia {
+    margin: 20px; padding: 18px 20px;
+    background: var(--accent-a08, rgba(60,130,246,0.07));
+    border: 1px solid var(--line-accent); border-radius: var(--r-sm);
+}
+.rac-ia-hdr {
+    font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--text-3); margin-bottom: 12px;
+}
+.rac-ia-txt { font-size: 0.9rem; line-height: 1.75; color: var(--text); }
+.rac-ia-pie {
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line);
+    font-size: 0.72rem; color: var(--text-4);
+}
+
+.rac-res { border-top: 1px solid var(--line); padding: 18px 20px; }
+.rac-res:hover { background: rgba(255,255,255,0.018); }
+.rac-res-hdr { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.rac-numeral {
+    font-family: var(--font-mono); font-size: 0.82rem; font-weight: 600;
+    color: var(--accent, #4c8dff); letter-spacing: 0.04em;
+}
+.rac-titulo { font-size: 0.92rem; font-weight: 600; color: var(--text); }
+.rac-origen {
+    margin-top: 6px; font-family: var(--font-mono); font-size: 0.66rem;
+    letter-spacing: 0.08em; color: var(--text-4);
+}
+.rac-extracto {
+    margin-top: 10px; font-size: 0.85rem; line-height: 1.75; color: var(--text-2);
+}
+.rac-extracto mark {
+    background: var(--accent-a28, rgba(60,130,246,0.3));
+    color: var(--text); padding: 0 2px; border-radius: 2px;
+}
+.rac-completo {
+    display: none; margin-top: 12px; padding: 14px 16px;
+    white-space: pre-wrap; font-size: 0.84rem; line-height: 1.8;
+    color: var(--text-2); background: var(--surface-2);
+    border-left: 2px solid var(--line-accent); border-radius: var(--r-sm);
+    max-height: 460px; overflow-y: auto;
+}
+.rac-res.abierto .rac-completo { display: block; }
+.rac-acc { display: flex; gap: 8px; margin-top: 12px; }
+.rac-mini {
+    font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.12em;
+    text-transform: uppercase; padding: 7px 12px; cursor: pointer;
+    color: var(--text-3); background: transparent;
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+}
+.rac-mini:hover { color: var(--text); border-color: var(--line-strong); }
+.rac-aviso {
+    margin: 20px; padding: 14px 18px; font-size: 0.8rem; line-height: 1.7;
+    color: var(--text-3); background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+}
+@media (max-width: 720px) {
+    .rac-sel, .rac-btn { width: 100%; max-width: none; }
+}
+
+.cie-grupo { border-top: 1px solid var(--line); }
+.cie-grupo-hdr {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 20px; cursor: pointer;
+    background: rgba(255,255,255,0.015);
+    transition: background var(--t-sm) var(--ease);
+}
+.cie-grupo-hdr:hover { background: rgba(255,255,255,0.04); }
+.cie-marca { width: 3px; height: 15px; border-radius: 1px; background: var(--text-4); flex-shrink: 0; }
+.cie-grupo.cierre .cie-marca { background: var(--danger); box-shadow: 0 0 10px rgba(255,107,107,0.6); }
+.cie-grupo-ttl {
+    font-family: var(--font-ui); font-size: 0.78rem; font-weight: 600;
+    letter-spacing: 0.11em; text-transform: uppercase; color: var(--text);
+}
+.cie-grupo-n {
+    font-family: var(--font-mono); font-size: 0.6rem; color: var(--text-3);
+    margin-left: auto; letter-spacing: 0.08em;
+}
+.cie-chev { color: var(--text-4); transition: transform var(--t-md) var(--ease); }
+.cie-grupo.abierto .cie-chev { transform: rotate(180deg); }
+.cie-lista { display: none; }
+.cie-grupo.abierto .cie-lista { display: block; }
+
+.cie-fila {
+    display: grid; grid-template-columns: 168px 1fr auto;
+    gap: 16px; align-items: start;
+    padding: 13px 20px 13px 36px;
+    border-top: 1px solid var(--line);
+    transition: background var(--t-sm) var(--ease);
+}
+.cie-fila:hover { background: rgba(255,255,255,0.022); }
+.cie-ad {
+    font-family: var(--font-mono); font-size: 0.72rem;
+    color: var(--accent-hi); letter-spacing: 0.06em;
+}
+.cie-ad-nombre {
+    font-family: var(--font-ui); font-size: 0.66rem; color: var(--text-3);
+    margin-top: 4px; line-height: 1.35;
+}
+.cie-ad-fir {
+    display: inline-block; margin-top: 5px; padding: 2px 7px;
+    font-family: var(--font-mono); font-size: 0.5rem;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--warn); border: 1px solid rgba(245,165,36,0.28);
+    background: var(--warn-a12); border-radius: var(--r-xs);
+}
+.cie-texto {
+    font-family: var(--font-mono); font-size: 0.72rem;
+    color: var(--text-2); line-height: 1.6; word-break: break-word;
+}
+.cie-id {
+    font-family: var(--font-mono); font-size: 0.58rem;
+    color: var(--text-4); letter-spacing: 0.08em; margin-top: 6px;
+}
+.cie-vig { color: var(--text-4); }
+.cie-acc { display: flex; gap: 8px; }
+
+@media (max-width: 820px) {
+    .cie-fila { grid-template-columns: 1fr; gap: 8px; padding-left: 20px; }
+}
+
+/* ═══════════════ CABECERAS DE SECCIÓN ═══════════════ */
+/* El patron de Fuselab: titulo en mayusculas espaciadas y, justo debajo,
+   una linea descriptiva mucho mas pequena. Antes el titulo iba en caja de
+   oracion y el subtitulo casi no se distinguia de el; ahora se leen como
+   dos niveles distintos. La marca de acento a la izquierda sustituye al
+   icono que alli acompana cada encabezado. */
+.section-head {
+    padding: 18px 24px; border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 14px;
+}
+.section-title {
+    position: relative;
+    font-family: var(--font-ui);
+    font-size: 0.86rem; font-weight: 600; color: #fff;
+    letter-spacing: 0.13em; text-transform: uppercase;
+    padding-left: 14px;
+}
+.section-title::before {
+    content: ''; position: absolute; left: 0; top: 50%;
+    width: 4px; height: 4px; margin-top: -2px;
+    background: var(--accent); border-radius: 1px;
+    box-shadow: 0 0 8px var(--accent-a30);
+}
+.section-sub {
+    font-family: var(--font-mono); font-size: 0.58rem;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--text-4); margin-top: 7px; padding-left: 14px;
+}
+
+hr { border: none; border-top: 1px solid var(--line); margin: 20px 0; }
+
+/* ═══════════════ PIE ═══════════════ */
+footer {
+    /* 0.6 dejaba pasar las nubes del video justo detras de una linea de
+       texto de 10 px. */
+    backdrop-filter: blur(16px); background: rgba(7,9,11,0.88);
+    border-top: 1px solid var(--line);
+    padding: 22px 2rem; text-align: center;
+    font-family: var(--font-mono);
+    font-size: 0.6rem; letter-spacing: 0.18em; text-transform: uppercase;
+    /* Quedaba en 4.38:1, a un pelo del 4.5 exigido: sube un escalon. */
+    color: var(--text-3);
+}
+
+/* ═══════════════ ANIMACIONES DE ENTRADA ═══════════════ */
+.fade-in { animation: fadeUp var(--t-lg) var(--ease) both; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(16px) } to { opacity: 1; transform: translateY(0) } }
+
+/* Aparición escalonada de los elementos al cargar cada vista */
+.reveal { opacity: 0; transform: translateY(20px); }
+.reveal.in { opacity: 1; transform: translateY(0); transition: opacity var(--t-lg) var(--ease), transform var(--t-lg) var(--ease); }
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+    .reveal { opacity: 1; transform: none; }
+}
+
+/* ═══════════════ REJILLA ═══════════════ */
+.met-layout { display: grid; grid-template-columns: 320px 1fr; gap: 24px; }
+@media (max-width: 960px) { .met-layout { grid-template-columns: 1fr } }
+@media (max-width: 600px) {
+    .met-grid { grid-template-columns: repeat(2,1fr) }
+    .tab-btn { padding: 8px 12px; font-size: 0.62rem; letter-spacing: 0.08em; }
+    .tab-btn::before, .tab-btn::after { display: none; }
+    .hero-strip { padding-top: 36px; }
+    .hero-title { letter-spacing: -0.04em; line-height: 0.98; max-width: none; }
+    .navbar { padding: 0 1rem; }
+    main { padding: 24px 1rem 2rem; }
+}
+
+/* ═══════════════ BARRA DE DESPLAZAMIENTO ═══════════════ */
+::-webkit-scrollbar { width: 8px; height: 8px }
+::-webkit-scrollbar-track { background: transparent }
+::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: var(--r-pill); border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: #2C333D; background-clip: content-box; }
+
+/* ═══════════════ MODAL IA ═══════════════ */
+.ai-modal-shell {
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-lg);
+    max-width: 680px; width: 100%;
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    animation: modalIn var(--t-md) var(--ease-spring) both;
+}
+@keyframes modalIn { from { opacity: 0; transform: translateY(18px) scale(0.97) } to { opacity: 1; transform: none } }
+.ai-modal-head {
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+    padding: 18px 22px; display: flex; justify-content: space-between; align-items: center;
+}
+.ai-modal-title {
+    font-family: var(--font-mono); font-size: 0.72rem; font-weight: 500;
+    letter-spacing: 0.13em; text-transform: uppercase; color: var(--accent); margin: 0;
+}
+.ai-modal-close {
+    background: transparent; border: 1px solid var(--line); border-radius: var(--r-xs);
+    width: 30px; height: 30px; color: var(--text-3); font-size: 0.9rem; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all var(--t-sm) var(--ease);
+}
+.ai-modal-close:hover { background: var(--danger-a12); border-color: var(--danger); color: var(--danger); transform: rotate(90deg); }
+.ai-modal-foot {
+    padding: 16px 22px; background: var(--bg-deep);
+    border-top: 1px solid var(--line);
+    display: flex; justify-content: flex-end;
+}
+.ai-modal-btn {
+    background: transparent; color: var(--text-2);
+    border: 1px solid var(--line-strong); padding: 10px 26px; border-radius: var(--r-sm);
+    font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.13em;
+    text-transform: uppercase; cursor: pointer;
+    transition: all var(--t-sm) var(--ease);
+}
+.ai-modal-btn:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ═══════════════ BOTÓN DE TEMA ═══════════════ */
+#themeFab {
+    position: fixed; bottom: 2rem; right: 2rem; z-index: 9999;
+    width: 46px; height: 46px; border-radius: var(--r-md);
+    border: 1px solid var(--line-strong);
+    background: rgba(18,21,25,0.9);
+    backdrop-filter: blur(12px);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    box-shadow: var(--shadow-md);
+    transition: border-color var(--t-sm) var(--ease), transform var(--t-md) var(--ease-spring),
+                box-shadow var(--t-md) var(--ease);
+}
+#themeFab:hover {
+    border-color: var(--line-accent);
+    transform: translateY(-3px);
+    box-shadow: 0 14px 34px -10px rgba(46,143,255,0.5);
+}
+#themeFab:active { transform: translateY(0) scale(0.94); }
+#themeFab svg { width: 20px; height: 20px; transition: transform var(--t-lg) var(--ease-spring); }
+#themeFab:hover svg { transform: rotate(-25deg) scale(1.1); }
+#themeFab .fab-icon-light { display: none; }
+
+/* ═══════════════════════════════════════════════════════════════
+   MODO CLARO
+   ═══════════════════════════════════════════════════════════════ */
+body.light {
+    --bg:          #F4F5F7;
+    --bg-deep:     #FFFFFF;
+    --surface:     #FFFFFF;
+    --surface-2:   #F7F8FA;
+    --surface-3:   #EDEFF3;
+    --line:        rgba(10,15,25,0.10);
+    --line-strong: rgba(10,15,25,0.18);
+    --line-accent: rgba(27,111,214,0.35);
+    --text:        #10141A;
+    --text-2:      #414A57;
+    /* Antes #6B7482 y #9AA2AE: sobre blanco daban 4.48:1 y 2.55:1. */
+    --text-3:      #5C6575;
+    --text-4:      #666E7B;
+    --text-nav:    #4A5462;
+    /* #1B6FD6 dejaba las insignias en 4.46:1 sobre su fondo tenue. */
+    --accent:      #1A64C0;
+    /* En oscuro --accent-hi es la version "mas clara" del acento; en claro
+       tiene que ser la mas OSCURA, porque el fondo cambio de lado. Con
+       #2E8FFF el titulo daba 2.70:1. */
+    --accent-hi:   #12559F;
+    --accent-lo:   #12559F;
+    --ok:          #0E9F6E;
+    /* El ambar sobre su propio fondo claro daba 3.63:1 en las insignias. */
+    --warn:        #8A5606;
+    --danger:      #D63C3C;
+    --shadow-md:   0 8px 24px -10px rgba(16,25,40,0.22);
+    --shadow-lg:   0 24px 60px -16px rgba(16,25,40,0.3);
+    background: var(--bg); color: var(--text);
+}
+body.light .bg-poster,
+body.light .bg-video { filter: grayscale(0.7) brightness(1.08) contrast(0.85); }
+body.light .bg-poster { opacity: 0.16; }
+body.light .bg-video.listo { opacity: 0.16; }
+body.light .bg-overlay {
+    background:
+        radial-gradient(120% 80% at 15% 0%, rgba(27,111,214,0.07) 0%, transparent 55%),
+        linear-gradient(to bottom, rgba(244,245,247,0.9) 0%, rgba(244,245,247,0.96) 45%, var(--bg) 100%);
+}
+body.light .bg-scanlines {
+    background-image:
+        linear-gradient(rgba(10,15,25,0.028) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(10,15,25,0.028) 1px, transparent 1px);
+}
+body.light .navbar { background: rgba(255,255,255,0.82); }
+body.light .navbar.is-scrolled { background: rgba(255,255,255,0.96); }
+body.light .brand-name { color: var(--text); }
+body.light .hero-title { color: #0A0E14; }
+body.light .card { background: rgba(255,255,255,0.9); }
+body.light .hero-kpis { background: rgba(255,255,255,0.72); }
+body.light footer { background: rgba(255,255,255,0.9); }
+body.light .empty-state { background: rgba(255,255,255,0.5); }
+body.light .btn-primary { background: rgba(10,15,25,0.02); color: var(--text); }
+body.light .btn-primary .btn-flecha { color: #FFFFFF; }
+body.light .card:hover { box-shadow: var(--shadow-md); }
+body.light .tab-rail { background: rgba(10,15,25,0.035); }
+body.light .tab-indicator {
+    background: linear-gradient(180deg, rgba(27,111,214,0.16), rgba(27,111,214,0.09));
+    box-shadow: 0 4px 14px -6px rgba(27,111,214,0.6);
+}
+body.light .tab-btn.active { color: var(--accent-lo); }
+body.light .terminal { background: #0B0F14; border-color: rgba(10,15,25,0.16); }
+body.light .terminal-green { color: #4ADE9B; }
+body.light .terminal-blue  { color: #7CB8FF; }
+body.light .met-val, body.light .section-title { color: #0A0E14; }
+body.light .data-table thead th { background: rgba(247,248,250,0.92); }
+body.light .data-table tbody tr:hover { background: rgba(27,111,214,0.045); }
+body.light .btn-notam { color: #FFFFFF; background: linear-gradient(180deg, #9A6209 0%, #7C4E05 100%); }
+body.light #themeFab { background: rgba(255,255,255,0.94); }
+body.light #themeFab .fab-icon-dark { display: none; }
+body.light #themeFab .fab-icon-light { display: block; }
+body.light .ai-modal-head { background: var(--surface-2); }
+
+/* ═══════════════════════════════════════════════════════════════
+   PANEL DE COORDENADAS
+   Antes vivia en un <style> propio con su paleta verde y estaba
+   posicionado con position:fixed, lo que lo sacaba del layout y lo
+   dejaba encima del titulo. Ahora es una tarjeta mas del sistema.
+   ═══════════════════════════════════════════════════════════════ */
+#geo-scope-wrap {
+    display: flex;
+    height: clamp(580px, calc(100vh - 300px), 860px);
+    background: var(--bg-deep);
+    color: var(--text);
+    position: relative;
+    overflow: hidden;
+}
+#geo-scope-wrap * { box-sizing: border-box; }
+.geo-layout { display: grid; grid-template-columns: 372px 1fr; width: 100%; height: 100%; }
+.geo-panel {
+    background: var(--surface);
+    border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; overflow: hidden;
+}
+.geo-scroll { overflow-y: auto; flex: 1; scrollbar-width: thin; }
+.geo-sec { padding: 18px 20px; border-bottom: 1px solid var(--line); }
+
+/* Rotulo de seccion con filete, como en el resto del portal */
+.geo-lbl {
+    font-family: var(--font-mono); font-size: 0.6rem;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 12px;
+    display: flex; align-items: center; gap: 10px;
+}
+.geo-lbl::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.geo-sublbl {
+    font-family: var(--font-mono); font-size: 0.56rem;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--text-4); margin: 16px 0 8px;
+}
+
+/* ── Campo de coordenadas ── */
+.geo-ta {
+    width: 100%; background: var(--bg-deep);
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+    padding: 13px 14px; color: var(--text);
+    font-family: var(--font-mono); font-size: 0.76rem; line-height: 1.85;
+    resize: vertical; min-height: 104px; outline: none;
+    transition: border-color var(--t-sm) var(--ease), box-shadow var(--t-md) var(--ease);
+}
+.geo-ta::placeholder { color: var(--text-4); }
+.geo-ta:hover { border-color: var(--line-strong); }
+.geo-ta:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-a08); }
+.geo-ta-actions { display: flex; gap: 8px; margin-top: 9px; }
+
+/* ── Boton pequeno ── */
+.geo-mini {
+    padding: 7px 14px; background: transparent;
+    border: 1px solid var(--line); border-radius: var(--r-xs);
+    color: var(--text-3); font-family: var(--font-mono);
+    font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase;
+    cursor: pointer; position: relative; z-index: 5;
+    transition: border-color var(--t-sm) var(--ease), color var(--t-sm) var(--ease),
+                background var(--t-sm) var(--ease), transform var(--t-sm) var(--ease-spring);
+}
+.geo-mini:hover { border-color: var(--line-accent); color: var(--accent); background: var(--accent-a08); transform: translateY(-1px); }
+.geo-mini:active { transform: scale(0.96); }
+
+/* ── Fichas de ejemplo ── */
+.geo-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.geo-chip {
+    font-family: var(--font-mono); font-size: 0.6rem;
+    padding: 6px 11px; background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: var(--r-xs);
+    color: var(--text-3); cursor: pointer;
+    transition: all var(--t-sm) var(--ease);
+}
+.geo-chip:hover { border-color: var(--line-accent); color: var(--accent); background: var(--accent-a08); transform: translateY(-1px); }
+.geo-chip:active { transform: scale(0.96); }
+
+/* ── Bloques desplegables ── */
+.geo-details { border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden; }
+.geo-summary {
+    list-style: none; cursor: pointer;
+    padding: 12px 14px; display: flex; align-items: center; justify-content: space-between;
+    font-family: var(--font-mono); font-size: 0.62rem;
+    letter-spacing: 0.13em; text-transform: uppercase; color: var(--text-2);
+    background: var(--surface-2);
+    transition: color var(--t-sm) var(--ease), background var(--t-sm) var(--ease);
+}
+.geo-summary::-webkit-details-marker { display: none; }
+.geo-summary:hover { color: var(--accent); background: var(--accent-a08); }
+.geo-caret { flex-shrink: 0; transition: transform var(--t-md) var(--ease); }
+.geo-details[open] .geo-summary { color: var(--accent); border-bottom: 1px solid var(--line); }
+.geo-details[open] .geo-caret { transform: rotate(180deg); }
+.geo-details-body { padding: 14px; animation: geoAbrir var(--t-md) var(--ease) both; }
+@keyframes geoAbrir { from { opacity: 0; transform: translateY(-6px) } to { opacity: 1; transform: none } }
+.geo-help { font-size: 0.74rem; line-height: 1.75; color: var(--text-3); margin-bottom: 12px; }
+.geo-help:last-child { margin-bottom: 0; margin-top: 12px; }
+.geo-help strong { color: var(--text-2); font-weight: 600; }
+
+/* ── Tabla de formatos ── */
+.geo-fmt-guide { border: 1px solid var(--line); border-radius: var(--r-xs); overflow: hidden; }
+.geo-fmt-row {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 9px 12px; border-bottom: 1px solid var(--line);
+    background: var(--bg-deep);
+}
+.geo-fmt-row:last-child { border-bottom: none; }
+.geo-fmt-label {
+    font-family: var(--font-mono); font-size: 0.56rem;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--text-4); min-width: 58px; flex-shrink: 0; padding-top: 2px;
+}
+.geo-fmt-val { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.geo-fmt-val b {
+    font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+    color: var(--accent); word-break: break-all; line-height: 1.5;
+}
+.geo-fmt-val em { font-style: normal; font-size: 0.66rem; color: var(--text-4); }
+
+/* ── Controles segmentados ── */
+.geo-seg {
+    display: flex; gap: 3px; padding: 3px;
+    background: var(--bg-deep);
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+}
+.geo-tbtn, .geo-msbtn {
+    flex: 1; padding: 8px 4px; background: transparent; border: none;
+    border-radius: var(--r-xs); cursor: pointer;
+    color: var(--text-3); font-family: var(--font-mono);
+    font-size: 0.6rem; letter-spacing: 0.06em; text-transform: uppercase;
+    white-space: nowrap;
+    transition: color var(--t-sm) var(--ease), background var(--t-sm) var(--ease);
+}
+.geo-tbtn:hover, .geo-msbtn:hover { color: var(--text); background: rgba(255,255,255,0.045); }
+.geo-tbtn.on, .geo-msbtn.on {
+    color: #fff;
+    background: linear-gradient(180deg, rgba(46,143,255,0.28), rgba(46,143,255,0.16));
+    box-shadow: inset 0 0 0 1px var(--line-accent);
+}
+
+/* ── Zona de imagen ── */
+.geo-drop {
+    border: 1px dashed var(--line-strong); border-radius: var(--r-sm);
+    padding: 20px 14px; text-align: center; cursor: pointer;
+    background: transparent; position: relative;
+    transition: border-color var(--t-md) var(--ease), background var(--t-md) var(--ease), transform var(--t-md) var(--ease);
+}
+.geo-drop:hover, .geo-drop.over { border-color: var(--accent); background: var(--accent-a08); transform: translateY(-2px); }
+.geo-drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+.geo-drop-icon { color: var(--text-4); margin-bottom: 9px; transition: color var(--t-sm) var(--ease); }
+.geo-drop:hover .geo-drop-icon { color: var(--accent); }
+.geo-drop p { font-size: 0.72rem; color: var(--text-3); line-height: 1.6; margin-bottom: 10px; }
+.geo-prev-wrap { margin-top: 10px; border-radius: var(--r-xs); overflow: hidden; max-height: 100px; display: none; position: relative; }
+.geo-prev-wrap img { width: 100%; height: 100%; object-fit: cover; }
+.geo-ocr-badge {
+    position: absolute; top: 6px; right: 6px;
+    background: var(--accent); color: #fff;
+    font-family: var(--font-mono); font-size: 0.54rem;
+    padding: 2px 7px; border-radius: var(--r-xs); letter-spacing: 0.1em;
+}
+.geo-ocr-bar-wrap { height: 2px; background: var(--line); border-radius: 2px; margin-top: 10px; display: none; overflow: hidden; }
+.geo-ocr-bar-inner { height: 100%; background: var(--accent); width: 0%; transition: width var(--t-md) var(--ease); }
+.geo-ocr-panels { margin-top: 12px; display: none; }
+.geo-ocr-panels.on { display: block; }
+.geo-ocr-panel-lbl {
+    font-family: var(--font-mono); font-size: 0.54rem; color: var(--text-4);
+    text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 5px;
+}
+.geo-ocr-raw-box {
+    background: var(--bg-deep); border: 1px solid var(--line); border-radius: var(--r-xs);
+    padding: 8px 10px; font-family: var(--font-mono); font-size: 0.6rem;
+    color: var(--text-4); line-height: 1.6; max-height: 60px; overflow-y: auto;
+    word-break: break-all; margin-bottom: 10px;
+}
+.geo-ocr-clean-box {
+    background: var(--accent-a08); border: 1px solid var(--line-accent); border-radius: var(--r-xs);
+    padding: 8px 10px; font-family: var(--font-mono); font-size: 0.64rem;
+    color: var(--accent); line-height: 1.7; max-height: 80px; overflow-y: auto;
+    white-space: pre-line;
+}
+
+/* ── Mediciones ── */
+.geo-metrics { display: none; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+.geo-metrics.on { display: block; animation: geoAbrir var(--t-lg) var(--ease) both; }
+.geo-metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.geo-metric {
+    background: var(--bg-deep); border: 1px solid var(--line);
+    border-radius: var(--r-xs); padding: 11px 12px;
+    transition: border-color var(--t-sm) var(--ease), transform var(--t-md) var(--ease-spring);
+}
+.geo-metric:hover { border-color: var(--line-accent); transform: translateY(-2px); }
+.geo-metric.destacada { border-color: var(--line-accent); background: var(--accent-a08); }
+/* Mismo tratamiento que las cifras del METAR y que el 84.2 % de la
+   referencia: el numero en la tipografia de titulares, con tracking
+   cerrado, y la unidad en mono, mas pequena y atenuada. */
+.geo-metric-val {
+    font-family: var(--font-ui); font-size: 1.45rem; font-weight: 500;
+    color: #fff; letter-spacing: -0.035em; line-height: 1.05;
+}
+.geo-metric-val span {
+    font-family: var(--font-mono); font-size: 0.6rem; color: var(--text-4);
+    margin-left: 4px; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.geo-metric.destacada .geo-metric-val { color: var(--accent-hi); }
+.geo-metric-lbl {
+    font-family: var(--font-mono); font-size: 0.54rem;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-4); margin-top: 5px;
+}
+.geo-metric-note {
+    font-size: 0.64rem; color: var(--text-4); line-height: 1.6;
+    margin-top: 10px; padding-left: 10px; border-left: 1px solid var(--line);
+}
+
+/* ── Mensajes ── */
+.geo-ld { display: none; align-items: center; gap: 9px; margin: 10px 20px; padding: 9px 12px;
+    background: var(--accent-a08); border: 1px solid var(--line-accent); border-radius: var(--r-xs); }
+.geo-ld.on { display: flex; }
+.geo-spin { width: 11px; height: 11px; border: 2px solid var(--line); border-top-color: var(--accent);
+    border-radius: 50%; animation: geoSp 0.7s linear infinite; flex-shrink: 0; }
+@keyframes geoSp { to { transform: rotate(360deg) } }
+.geo-ld-t { font-family: var(--font-mono); font-size: 0.64rem; color: var(--accent); }
+.geo-err, .geo-info { display: none; margin: 10px 20px; padding: 10px 13px; border-radius: var(--r-xs);
+    font-size: 0.7rem; line-height: 1.6; white-space: pre-line; }
+.geo-err { background: var(--danger-a12); border: 1px solid rgba(255,107,107,0.25); color: var(--danger); }
+.geo-info { background: var(--ok-a12); border: 1px solid rgba(61,220,151,0.25); color: var(--ok);
+    font-family: var(--font-mono); font-size: 0.64rem; }
+.geo-err.on, .geo-info.on { display: block; }
+
+/* ── Estado vacio y analisis ── */
+.geo-desc-empty {
+    padding: 34px 20px; display: flex; flex-direction: column; align-items: center;
+    gap: 14px; color: var(--text-4); font-size: 0.74rem; text-align: center; line-height: 1.7;
+}
+.geo-desc-empty strong { color: var(--accent); font-weight: 600; }
+.geo-desc-card { display: none; border: 1px solid var(--line); border-radius: var(--r-sm); margin: 0 20px 20px; overflow: hidden; }
+.geo-desc-card.on { display: block; animation: geoAbrir var(--t-lg) var(--ease) both; }
+.geo-desc-hdr { padding: 11px 14px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 9px; background: var(--surface-2); }
+.geo-dot { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; animation: blink 2.2s var(--ease-inout) infinite; }
+.geo-desc-ttl { font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+.geo-desc-body { padding: 14px; font-size: 0.75rem; line-height: 1.8; color: var(--text-3); }
+.geo-desc-body p { margin-bottom: 8px; }
+.geo-stag {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--font-mono); font-size: 0.56rem; letter-spacing: 0.1em;
+    padding: 3px 8px; border-radius: var(--r-xs); margin-bottom: 10px;
+    background: var(--ok-a12); color: var(--ok); border: 1px solid rgba(61,220,151,0.25);
+}
+.geo-coord-sum { margin-top: 12px; background: var(--bg-deep); border: 1px solid var(--line); border-radius: var(--r-xs); overflow: hidden; }
+.geo-sum-row { display: flex; justify-content: space-between; padding: 6px 11px; border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.62rem; }
+.geo-sum-row:last-child { border-bottom: none; }
+.geo-sum-row .k { color: var(--text-4); }
+.geo-sum-row .v { color: var(--accent); }
+
+/* ── Pie fijo con la accion principal ── */
+.geo-foot { border-top: 1px solid var(--line); padding: 14px 20px; background: var(--surface-2); flex-shrink: 0; }
+.geo-foot .geo-ld { margin: 0 0 10px; }
+.geo-vbtn {
+    position: relative; overflow: hidden; width: 100%;
+    padding: 13px; border: none; border-radius: var(--r-sm);
+    background: linear-gradient(180deg, var(--accent) 0%, var(--accent-lo) 100%);
+    color: #fff; font-family: var(--font-mono); font-weight: 500;
+    font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase;
+    cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 9px;
+    box-shadow: 0 6px 20px -8px rgba(46,143,255,0.75), inset 0 1px 0 rgba(255,255,255,0.2);
+    transition: transform var(--t-sm) var(--ease-spring), box-shadow var(--t-md) var(--ease), opacity var(--t-sm) var(--ease);
+}
+.geo-vbtn::before {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.24) 50%, transparent 70%);
+    transform: translateX(-120%); transition: transform var(--t-xl) var(--ease);
+}
+.geo-vbtn:hover:not(:disabled)::before { transform: translateX(120%); }
+.geo-vbtn > * { position: relative; z-index: 1; }
+.geo-vbtn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 12px 30px -8px rgba(46,143,255,0.9); }
+.geo-vbtn:active:not(:disabled) { transform: translateY(0) scale(0.98); }
+.geo-vbtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Mapa ── */
+.geo-map-wrap { position: relative; height: 100%; }
+#geoMap { width: 100%; height: 100%; background: var(--bg-deep); }
+.geo-map-badge {
+    position: absolute; top: 14px; left: 14px; z-index: 1000;
+    background: rgba(11,13,16,0.92); border: 1px solid var(--line-strong);
+    border-radius: var(--r-sm); padding: 9px 13px;
+    backdrop-filter: blur(10px); display: none;
+}
+.geo-map-badge.on { display: block; animation: geoAbrir var(--t-md) var(--ease) both; }
+.geo-mb-lbl { font-family: var(--font-mono); font-size: 0.52rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-4); }
+.geo-mb-val { font-family: var(--font-mono); font-size: 0.68rem; color: var(--accent); margin-top: 4px; }
+.geo-vtx-tip {
+    background: var(--surface-2) !important; border: 1px solid var(--line-accent) !important;
+    color: var(--accent) !important; font-family: var(--font-mono) !important;
+    font-size: 0.66rem !important; padding: 6px 9px !important;
+    border-radius: var(--r-xs) !important; box-shadow: var(--shadow-md) !important;
+}
+.geo-vtx-tip::before { border-top-color: var(--line-accent) !important; }
+.leaflet-control-zoom a { background: var(--surface) !important; color: var(--text-2) !important; border-color: var(--line) !important; }
+.leaflet-control-zoom a:hover { background: var(--surface-3) !important; color: var(--accent) !important; }
+.leaflet-control-attribution { background: rgba(11,13,16,0.8) !important; color: var(--text-4) !important; font-size: 0.58rem !important; }
+.leaflet-control-attribution a { color: var(--text-3) !important; }
+
+/* ── Modo claro ── */
+body.light .geo-map-badge { background: rgba(255,255,255,0.94); }
+body.light .geo-tbtn.on, body.light .geo-msbtn.on {
+    color: var(--accent-lo);
+    background: linear-gradient(180deg, rgba(27,111,214,0.18), rgba(27,111,214,0.1));
+}
+body.light .geo-metric-val { color: #0A0E14; }
+body.light .leaflet-control-attribution { background: rgba(255,255,255,0.85) !important; }
+
+/* ── Pantallas estrechas: el panel arriba y el mapa debajo ── */
+@media (max-width: 900px) {
+    #geo-scope-wrap { height: auto; }
+    .geo-layout { grid-template-columns: 1fr; }
+    .geo-panel { border-right: none; border-bottom: 1px solid var(--line); }
+    .geo-scroll { max-height: 460px; }
+    .geo-map-wrap { height: 420px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══ FONDO ═══ -->
+<div class="bg-poster"></div>
+<video class="bg-video" id="bgVideo"
+       autoplay muted loop playsinline preload="auto"
+       aria-hidden="true" tabindex="-1">
+    <source src="/static/hero-nubes.webm" type="video/webm">
+    <source src="/static/hero-nubes.mp4"  type="video/mp4">
+</video>
+<div class="bg-overlay"></div>
+<div class="bg-scanlines"></div>
+
+<div id="app">
+
+<!-- ═══ NAVBAR ═══ -->
+<nav class="navbar">
+  <div class="navbar-inner">
+    <div class="brand">
+      <div class="brand-emblem">
+        <svg xmlns="http://www.w3.org/2000/svg" style="width:22px;height:22px;color:#fff;position:relative;z-index:1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+        </svg>
+      </div>
+      <div>
+        <div class="brand-name">Colombia AIS / MET</div>
+        <div class="brand-sub" id="zuluClock">Sincronizando UTC…</div>
+      </div>
+    </div>
+
+    <div class="tab-rail">
+      <button class="tab-btn active" id="btn-met"   onclick="switchTab('met')">METAR / TAF</button>
+      <button class="tab-btn"        id="btn-notam" onclick="switchTab('notam')">NOTAMs</button>
+      <button class="tab-btn"        id="btn-ad"    onclick="switchTab('ad')">Aeródromos</button>
+      <button class="tab-btn"        id="btn-cierres" onclick="switchTab('cierres')">Cierres</button>
+      <button class="tab-btn"        id="btn-rac"   onclick="switchTab('rac')">Reglamentos</button>
+      <button class="tab-btn"        id="btn-geo"   onclick="switchTab('geo')">Coordenadas</button>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══ HERO STRIP ═══ -->
+<div class="hero-strip">
+  <h1 class="hero-title">Portal de <span>Información</span><br>Aeronáutica</h1>
+  <div class="hero-kpis">
+    <div class="kpi">
+      <div class="kpi-lbl">Estado</div>
+      <div class="kpi-val"><span class="kpi-dot green"></span>Operativo</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-lbl">Hora Zulú</div>
+      <div class="kpi-val"><span class="kpi-dot sky"></span><span id="heroUtc">--:--Z</span></div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-lbl">Cobertura</div>
+      <div class="kpi-val"><span class="kpi-dot amber"></span>21 aeródromos</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-lbl">Fuentes</div>
+      <div class="kpi-val"><span class="kpi-dot sky"></span>AVWX / Aerocivil</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MAIN ═══ -->
+<main>
+
+  <!-- TAB: METAR/TAF -->
+  <section id="tab-met" class="tab-content fade-in">
+    <div class="met-layout">
+
+      <!-- Sidebar -->
+      <div style="display:flex;flex-direction:column;gap:16px;">
+        <div class="card" style="padding:24px;">
+          <label class="field-label">Indicador ICAO</label>
+          <input type="text" id="icaoInput" placeholder="SKBQ" autocomplete="off">
+          <div style="height:14px;"></div>
+          <button class="btn btn-primary" onclick="fetchAviationData()">
+            <span>Consultar</span>
+            <span class="btn-flecha" aria-hidden="true">
+              <svg xmlns="http://www.w3.org/2000/svg" style="width:15px;height:15px" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M5 12h14m0 0l-5-5m5 5l-5 5"/>
+              </svg>
+            </span>
+          </button>
+          <button class="btn btn-danger" id="btnPdf" onclick="generarPDF()" style="display:none;">
+            <svg xmlns="http://www.w3.org/2000/svg" style="width:16px;height:16px" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+            Reporte (PDF)
+          </button>
+          <hr>
+          <p class="field-label" style="text-align:center;margin-bottom:10px;">Fuentes externas</p>
+          <a href="https://meteorologia.aerocivil.gov.co/obs_map" target="_blank" class="ext-link">
+            <span>Mapa de Observación</span>
+            <svg xmlns="http://www.w3.org/2000/svg" style="width:14px;height:14px" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+            </svg>
+          </a>
+        </div>
+      </div>
+
+      <!-- Results -->
+      <div>
+        <div id="emptyState" class="empty-state">
+          <svg xmlns="http://www.w3.org/2000/svg" style="width:56px;height:56px;opacity:0.5;stroke-width:1.2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+          </svg>
+          <p>Ingrese indicador ICAO para iniciar consulta técnica</p>
+        </div>
+
+        <div id="resultsDisplay" style="display:none;" class="fade-in">
+          <div style="display:flex;flex-direction:column;gap:20px;">
+
+            <!-- METAR -->
+            <div class="card card-glow-green" style="padding:28px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px;">
+                <div style="display:flex;align-items:center;gap:12px;">
+                  <span class="badge badge-green"><span class="badge-dot"></span>METAR Tiempo Real</span>
+                  <span class="section-title" style="font-size:1.35rem;" id="dispIcao">----</span>
+                </div>
+                <span id="dispTime" class="notam-ts">--:--Z</span>
+              </div>
+              <div class="terminal terminal-green" id="rawMetar">Cargando…</div>
+              <div class="met-grid" id="decodedSummary"></div>
+            </div>
+
+            <!-- TAF -->
+            <div class="card card-glow-sky" style="padding:28px;">
+              <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+                <span class="badge badge-sky">Pronóstico TAF</span>
+              </div>
+              <div class="terminal terminal-blue" id="rawTaf">Consultando pronóstico…</div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- TAB: NOTAMs -->
+  <section id="tab-notam" class="tab-content fade-in" style="display:none;">
+    <div class="card card-glow-orange" style="overflow:hidden;">
+
+      <!-- ── BARRA DE BÚSQUEDA UNIFICADA ── -->
+      <div style="padding:20px 24px 0 24px;">
+        <div class="notam-search-bar">
+          <div style="flex:1;min-width:220px;">
+            <div class="field-label">Consultar Aeródromo o Palabra Clave</div>
+            <input type="text" id="notamUnifiedInput"
+              onkeydown="if(event.key==='Enter') fetchNotamsUnified()"
+              placeholder="Ej: SKBQ, SKTL, PISTA, CLSD…"
+              class="notam-search-input">
+          </div>
+          <button onclick="fetchNotamsUnified()"
+            class="btn-notam">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            BUSCAR
+          </button>
+        </div>
+      </div>
+
+      <!-- ── CABECERA RESULTADO ── -->
+      <div class="section-head">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span class="badge badge-orange">NOTAMs</span>
+          <span class="section-title" id="notamIcaoHeader">----</span>
+        </div>
+      </div>
+
+      <!-- ── TABLA ── -->
+      <div style="overflow-x:auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:18%;">ID Oficial</th>
+              <th style="width:62%;">Contenido / Restricción</th>
+              <th style="width:20%;text-align:right;">Acción IA</th>
+            </tr>
+          </thead>
+          <tbody id="notamTableBody">
+            <tr><td colspan="3" style="padding:48px;text-align:center;color:var(--text-4);">
+              Utilice el buscador superior para cargar NOTAMs.
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB: AERÓDROMOS -->
+  <section id="tab-ad" class="tab-content fade-in" style="display:none;">
+    <div class="card" style="overflow:hidden;">
+      <div class="section-head">
+        <div>
+          <div class="section-title">Directorio de Aeródromos Controlados</div>
+          <div class="section-sub">Colombia — FIR Bogotá / Barranquilla</div>
+        </div>
+        <div class="search-wrap" style="width:300px;">
+          <svg xmlns="http://www.w3.org/2000/svg" style="width:15px;height:15px;" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+          <input type="text" id="adSearch" onkeyup="searchAD()" placeholder="Filtrar ICAO, ciudad o nombre…">
+        </div>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>ICAO</th>
+              <th>Nombre</th>
+              <th>Ciudad</th>
+              <th>Horario (LOCAL)</th>
+            </tr>
+          </thead>
+          <tbody id="adTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB: COORDENADAS (GeoScope) -->
+<section id="tab-cierres" class="tab-content fade-in" style="display:none;">
+  <div class="card">
+    <div class="section-head">
+      <div>
+        <div class="section-title">Cierres y Restricciones</div>
+        <div class="section-sub">Aeródromos cerrados o limitados y NOTAMs de FIR</div>
+      </div>
+      <div class="badge badge-sky"><span class="badge-dot"></span><span id="cieTotal">—</span></div>
+    </div>
+
+    <div class="cie-resumen" id="cieResumen"></div>
+
+    <div class="cie-filtros">
+      <button class="cie-filtro on" data-f="todos"      onclick="cieFiltrar(this)">Todo</button>
+      <button class="cie-filtro"    data-f="cierre"     onclick="cieFiltrar(this)">Solo cierres</button>
+      <button class="cie-filtro"    data-f="aerodromos" onclick="cieFiltrar(this)">Solo aeródromos</button>
+      <button class="cie-filtro"    data-f="fir"        onclick="cieFiltrar(this)">Solo FIR</button>
+    </div>
+
+    <div id="cieCuerpo"></div>
+  </div>
+</section>
+
+<section id="tab-rac" class="tab-content fade-in" style="display:none;">
+  <div class="card">
+    <div class="section-head">
+      <div>
+        <div class="section-title">Reglamentos Aeronáuticos</div>
+        <div class="section-sub">Busque por palabra clave en los RAC vigentes</div>
+      </div>
+      <div class="badge badge-sky"><span class="badge-dot"></span><span id="racEstado">—</span></div>
+    </div>
+
+    <div class="rac-buscador">
+      <div class="rac-fila-busq">
+        <input class="rac-input" id="racQ" type="search" autocomplete="off"
+               placeholder="¿Con cuánta antelación se presenta el plan de vuelo?">
+        <select class="rac-sel" id="racFiltro"><option value="">Todos los reglamentos</option></select>
+        <button class="rac-btn" id="racBtn" type="button" onclick="racBuscar()">Buscar</button>
+      </div>
+      <div class="rac-opciones">
+        <label class="rac-check">
+          <input type="checkbox" id="racIA" checked>
+          <span>Resumir con IA citando el numeral</span>
+        </label>
+        <span id="racConteo"></span>
+      </div>
+      <div class="rac-ejemplos" id="racEjemplos"></div>
+    </div>
+
+    <div id="racCuerpo">
+      <div class="empty-state" style="min-height:200px;">
+        <p>Escriba una duda o una palabra clave. También puede escribir un
+           numeral directamente, por ejemplo <b>91.310</b>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="tab-geo" class="tab-content fade-in" style="display:none;">
+  <div class="card" style="overflow:hidden;">
+    <div class="section-head">
+      <div>
+        <div class="section-title">Visualizador de Coordenadas</div>
+        <div class="section-sub">Puntos, polígonos y radios NOTAM sobre el mapa</div>
+      </div>
+      <span class="badge badge-sky" id="geoPointCount">0 puntos detectados</span>
+    </div>
+
+  
+
+
+  <div id="geo-scope-wrap">
+    <div class="geo-layout">
+      <div class="geo-panel">
+        <div class="geo-scroll">
+
+          <!-- ── 1. COORDENADAS ── -->
+          <div class="geo-sec">
+            <div class="geo-lbl"><span>Coordenadas</span></div>
+            <textarea class="geo-ta" id="geoCoordTa" rows="5"
+              placeholder="Una coordenada por línea.&#10;084925.00N0755402.00W&#10;10.9685, -74.7813"></textarea>
+            <div class="geo-ta-actions">
+              <button class="geo-mini" id="geoPasteTxtBtn" type="button">Pegar</button>
+              <button class="geo-mini" id="geoClearBtn" type="button">Limpiar</button>
+            </div>
+
+            <div class="geo-sublbl">Cargar un ejemplo</div>
+            <div class="geo-chips">
+              <button class="geo-chip" id="geo-chip-ddmmss" type="button">DDMMSS</button>
+              <button class="geo-chip" id="geo-chip-point" type="button">Decimal</button>
+              <button class="geo-chip" id="geo-chip-dms" type="button">DMS</button>
+              <button class="geo-chip" id="geo-chip-polygon" type="button">Polígono</button>
+              <button class="geo-chip" id="geo-chip-baq" type="button">Barranquilla</button>
+            </div>
+          </div>
+
+          <!-- ── 2. COMO INGRESARLAS ── -->
+          <div class="geo-sec">
+            <details class="geo-details">
+              <summary class="geo-summary">
+                <span>Cómo ingresar las coordenadas</span>
+                <svg class="geo-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+              </summary>
+              <div class="geo-details-body">
+                <p class="geo-help">
+                  Escribe o pega <strong>una coordenada por línea</strong>. Se reconoce el
+                  formato automáticamente; no hace falta elegirlo.
+                </p>
+                <div class="geo-fmt-guide">
+                  <div class="geo-fmt-row">
+                    <span class="geo-fmt-label">DDMMSS</span>
+                    <span class="geo-fmt-val"><b>084925.00N0755402.00W</b><em>El formato de los NOTAM</em></span>
+                  </div>
+                  <div class="geo-fmt-row">
+                    <span class="geo-fmt-label">Decimal</span>
+                    <span class="geo-fmt-val"><b>10.9685, -74.7813</b><em>Sur y Oeste van en negativo</em></span>
+                  </div>
+                  <div class="geo-fmt-row">
+                    <span class="geo-fmt-label">DMS</span>
+                    <span class="geo-fmt-val"><b>10&deg;49'25"N 75&deg;54'02"W</b><em>Grados, minutos y segundos</em></span>
+                  </div>
+                  <div class="geo-fmt-row">
+                    <span class="geo-fmt-label">Radio</span>
+                    <span class="geo-fmt-val"><b>084925.00N0755402.00W 15NM</b><em>El radio junto a la coordenada dibuja el círculo. También sirve <b>RADIO 5 NM CENTRO &lt;coordenada&gt;</b>, y en KM</em></span>
+                  </div>
+                </div>
+                <p class="geo-help">
+                  Con <strong>1 punto</strong> se marca una posicion, con <strong>2</strong> se
+                  traza un círculo entre ambos, y con <strong>3 o más</strong> un polígono.
+                </p>
+              </div>
+            </details>
+          </div>
+
+          <!-- ── 3. LEER DESDE UNA IMAGEN ── -->
+          <div class="geo-sec">
+            <details class="geo-details">
+              <summary class="geo-summary">
+                <span>Leer desde una imagen</span>
+                <svg class="geo-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+              </summary>
+              <div class="geo-details-body">
+                <div class="geo-drop" id="geoDropZone">
+                  <input type="file" id="geoImgFile" accept="image/*">
+                  <svg class="geo-drop-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                  <p>Arrastra una imagen, haz clic o pega con Ctrl+V</p>
+                  <button class="geo-mini" id="geoPasteBtn" type="button">Pegar del portapapeles</button>
+                </div>
+                <div class="geo-ocr-bar-wrap" id="geoOcrBarWrap"><div class="geo-ocr-bar-inner" id="geoOcrBar"></div></div>
+                <div class="geo-prev-wrap" id="geoPrevWrap"><img id="geoPrevImg" src="" alt=""><div class="geo-ocr-badge">OCR</div></div>
+                <div class="geo-ocr-panels" id="geoOcrPanels">
+                  <div class="geo-ocr-panel-lbl">Texto leído</div>
+                  <div class="geo-ocr-raw-box" id="geoOcrRaw"></div>
+                  <div class="geo-ocr-panel-lbl">Coordenadas extraídas</div>
+                  <div class="geo-ocr-clean-box" id="geoOcrClean"></div>
+                </div>
+              </div>
+            </details>
+          </div>
+
+          <!-- ── 4. VISUALIZACION ── -->
+          <div class="geo-sec">
+            <div class="geo-lbl"><span>Figura</span></div>
+            <div class="geo-seg" id="geoTypeSeg">
+              <button class="geo-tbtn on" data-gt="auto" type="button">Auto</button>
+              <button class="geo-tbtn" data-gt="point" type="button">Punto</button>
+              <button class="geo-tbtn" data-gt="polygon" type="button">Polígono</button>
+              <button class="geo-tbtn" data-gt="circle" type="button">Círculo</button>
+            </div>
+
+            <div class="geo-sublbl">Estilo de mapa</div>
+            <div class="geo-seg">
+              <button class="geo-msbtn on" data-gms="carto" type="button">Oscuro</button>
+              <button class="geo-msbtn" data-gms="esri" type="button">Satélite</button>
+              <button class="geo-msbtn" data-gms="topo" type="button">Topográfico</button>
+              <button class="geo-msbtn" data-gms="osm" type="button">Calles</button>
+            </div>
+          </div>
+
+          <!-- ── Mensajes ── -->
+          <div class="geo-info" id="geoInfoMsg"></div>
+          <div class="geo-ld" id="geoLd"><div class="geo-spin"></div><div class="geo-ld-t" id="geoLdTxt">Procesando...</div></div>
+          <div class="geo-err" id="geoErrMsg"></div>
+
+          <!-- ── 5. MEDICIONES ── -->
+          <div class="geo-metrics" id="geoMetrics">
+            <div class="geo-lbl"><span>Mediciones</span></div>
+            <div class="geo-metric-grid" id="geoMetricGrid"></div>
+            <div class="geo-metric-note" id="geoMetricNote"></div>
+          </div>
+
+          <div class="geo-desc-empty" id="geoEmptyState">
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            <div>Ingresa coordenadas y pulsa<br><strong>Visualizar en mapa</strong></div>
+          </div>
+
+          <div class="geo-desc-card" id="geoDescCard">
+            <div class="geo-desc-hdr"><div class="geo-dot"></div><div class="geo-desc-ttl">Análisis de zona</div></div>
+            <div class="geo-desc-body" id="geoDescBody"></div>
+          </div>
+
+        </div>
+        <div class="geo-foot">
+          <div class="geo-ld" id="geoLd2"><div class="geo-spin"></div><div class="geo-ld-t" id="geoLdTxt2">Procesando...</div></div>
+          <button class="geo-vbtn" id="geoVBtn" type="button">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            Visualizar en mapa
+          </button>
+        </div>
+      </div>
+
+      <div class="geo-map-wrap">
+        <div id="geoMap"></div>
+        <div class="geo-map-badge" id="geoMapBadge">
+          <div class="geo-mb-lbl">Coordenada de referencia</div>
+          <div class="geo-mb-val" id="geoMbVal"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function() {
+    var GEO_TILES = {
+      carto: { url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', attr:'© CARTO © OSM', opts:{ subdomains:'abcd', maxZoom:20 } },
+      esri:  { url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr:'© Esri', opts:{ maxZoom:19 } },
+      topo:  { url:'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', attr:'© OpenTopoMap', opts:{ maxZoom:17 } },
+      osm:   { url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', attr:'© OpenStreetMap', opts:{ maxZoom:19 } }
+    };
+    var geoMap, geoTileLayer, geoCurrentLayer, geoType='auto', geoMapInit=false;
+    var geoRadiusNM = null;
+
+    /* ═══════════════ MEDICIONES EN MILLAS NAUTICAS ═══════════════
+       R_NM es el radio medio terrestre expresado en millas nauticas.
+       Una milla nautica equivale a un minuto de arco de meridiano,
+       que es justamente por lo que la aeronautica la usa.            */
+    var GEO_R_NM = 3440.065;
+
+    function geoDistNM(a, b) {
+        var rad = Math.PI / 180;
+        var dLat = (b[0] - a[0]) * rad, dLng = (b[1] - a[1]) * rad;
+        var la1 = a[0] * rad, la2 = b[0] * rad;
+        var h = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(la1) * Math.cos(la2) * Math.sin(dLng/2) * Math.sin(dLng/2);
+        return 2 * GEO_R_NM * Math.asin(Math.min(1, Math.sqrt(h)));
+    }
+
+    /* Area por formula del zapatero sobre una proyeccion equirectangular
+       centrada en la latitud media. Para zonas del tamano de un NOTAM el
+       error es despreciable; en areas continentales dejaria de serlo. */
+    function geoAreaNM2(coords) {
+        if (coords.length < 3) return 0;
+        var rad = Math.PI / 180;
+        var latMedia = coords.reduce(function(s,c){ return s + c[0]; }, 0) / coords.length * rad;
+        var pts = coords.map(function(c){
+            return [ c[1] * rad * Math.cos(latMedia) * GEO_R_NM, c[0] * rad * GEO_R_NM ];
+        });
+        var a = 0;
+        for (var i = 0; i < pts.length; i++) {
+            var j = (i + 1) % pts.length;
+            a += pts[i][0] * pts[j][1] - pts[j][0] * pts[i][1];
+        }
+        return Math.abs(a / 2);
+    }
+
+    function geoPerimetroNM(coords, cerrado) {
+        var t = 0;
+        for (var i = 0; i < coords.length - 1; i++) t += geoDistNM(coords[i], coords[i+1]);
+        if (cerrado && coords.length > 2) t += geoDistNM(coords[coords.length-1], coords[0]);
+        return t;
+    }
+
+    function geoSeparacionMaxNM(coords) {
+        var max = 0;
+        for (var i = 0; i < coords.length; i++)
+            for (var j = i + 1; j < coords.length; j++)
+                max = Math.max(max, geoDistNM(coords[i], coords[j]));
+        return max;
+    }
+
+    function geoNum(v) {
+        if (v >= 100) return v.toFixed(0);
+        if (v >= 10)  return v.toFixed(1);
+        return v.toFixed(2);
+    }
+
+    function geoMetrica(valor, unidad, etiqueta, destacada) {
+        return '<div class="geo-metric' + (destacada ? ' destacada' : '') + '">' +
+               '<div class="geo-metric-val">' + valor + (unidad ? '<span>' + unidad + '</span>' : '') + '</div>' +
+               '<div class="geo-metric-lbl">' + etiqueta + '</div></div>';
+    }
+
+    function geoShowMetrics(coords, type) {
+        var caja = document.getElementById('geoMetrics');
+        var grid = document.getElementById('geoMetricGrid');
+        var nota = document.getElementById('geoMetricNote');
+        var h = '', texto = '';
+
+        if (type === 'circle' && geoRadiusNM !== null) {
+            var area = Math.PI * geoRadiusNM * geoRadiusNM;
+            h += geoMetrica(geoNum(geoRadiusNM), 'NM', 'Radio', true);
+            h += geoMetrica(geoNum(geoRadiusNM * 2), 'NM', 'Diámetro', true);
+            h += geoMetrica(geoNum(area), 'NM&sup2;', 'Área cubierta');
+            h += geoMetrica(geoNum(geoRadiusNM * 1.852), 'km', 'Radio en km');
+            texto = 'Cualquier punto dentro del círculo está a menos de ' +
+                    geoNum(geoRadiusNM) + ' NM del centro.';
+        } else if (coords.length >= 3) {
+            var perim = geoPerimetroNM(coords, true);
+            var area2 = geoAreaNM2(coords);
+            var lats = coords.map(function(c){ return c[0]; });
+            var lngs = coords.map(function(c){ return c[1]; });
+            var latMin = Math.min.apply(null, lats), latMax = Math.max.apply(null, lats);
+            var lngMin = Math.min.apply(null, lngs), lngMax = Math.max.apply(null, lngs);
+            var latMed = (latMin + latMax) / 2, lngMed = (lngMin + lngMax) / 2;
+            var ns = geoDistNM([latMin, lngMed], [latMax, lngMed]);
+            var eo = geoDistNM([latMed, lngMin], [latMed, lngMax]);
+            h += geoMetrica(geoNum(area2), 'NM&sup2;', 'Área cubierta', true);
+            h += geoMetrica(geoNum(perim), 'NM', 'Perímetro', true);
+            h += geoMetrica(geoNum(ns), 'NM', 'Extensión norte-sur');
+            h += geoMetrica(geoNum(eo), 'NM', 'Extensión este-oeste');
+            h += geoMetrica(geoNum(geoSeparacionMaxNM(coords)), 'NM', 'Distancia máxima');
+            h += geoMetrica(String(coords.length), '', 'Vértices');
+            texto = 'El área se calcula proyectando el polígono a la latitud media. ' +
+                    'Es exacta para zonas del tamaño de un NOTAM.';
+        } else if (coords.length === 2) {
+            var d = geoDistNM(coords[0], coords[1]);
+            h += geoMetrica(geoNum(d), 'NM', 'Separación', true);
+            h += geoMetrica(geoNum(d * 1.852), 'km', 'En kilómetros');
+        } else {
+            caja.classList.remove('on');
+            return;
+        }
+
+        document.getElementById('geoEmptyState').style.display = 'none';
+        grid.innerHTML = h;
+        nota.textContent = texto;
+        nota.style.display = texto ? 'block' : 'none';
+        caja.classList.add('on');
+    }
+
+    function initGeoMap(){
+      if(geoMapInit) return;
+      geoMapInit=true;
+      geoMap = L.map('geoMap',{zoomControl:true}).setView([8.8,-75.5],7);
+      geoTileLayer = L.tileLayer(GEO_TILES.carto.url, Object.assign({attribution:GEO_TILES.carto.attr}, GEO_TILES.carto.opts)).addTo(geoMap);
+      setTimeout(function(){ geoMap.invalidateSize(); }, 300);
+    }
+
+    // Init map when tab is shown
+    document.getElementById('btn-geo').addEventListener('click', function(){
+      setTimeout(initGeoMap, 100);
+    });
+
+    document.querySelectorAll('.geo-msbtn').forEach(function(btn){
+      btn.onclick=function(){
+        document.querySelectorAll('.geo-msbtn').forEach(function(b){b.classList.remove('on');});
+        btn.classList.add('on');
+        if(!geoMap) return;
+        var t=GEO_TILES[btn.getAttribute('data-gms')];
+        if(geoTileLayer) geoMap.removeLayer(geoTileLayer);
+        geoTileLayer=L.tileLayer(t.url,Object.assign({attribution:t.attr},t.opts)).addTo(geoMap);
+      };
+    });
+
+    var GEO_EXAMPLES = {
+      ddmmss:'084925.00N0755402.00W\n084558.00N0755149.00W\n084418.00N0755426.00W\n084744.00N0755638.00W',
+      point:'10.9685, -74.7813', dms:"10°49'25\"N 75°54'02\"W",
+      polygon:'10.9700, -74.7850\n10.9720, -74.7800\n10.9690, -74.7780\n10.9660, -74.7810\n10.9670, -74.7850',
+      baq:'10.9878, -74.8089\n10.9950, -74.8200\n10.9800, -74.8300\n10.9700, -74.8150\n10.9780, -74.8050'
+    };
+    document.getElementById('geo-chip-ddmmss').onclick=function(){document.getElementById('geoCoordTa').value=GEO_EXAMPLES.ddmmss;geoActualizarContador();};
+    document.getElementById('geo-chip-point').onclick=function(){document.getElementById('geoCoordTa').value=GEO_EXAMPLES.point;geoActualizarContador();};
+    document.getElementById('geo-chip-dms').onclick=function(){document.getElementById('geoCoordTa').value=GEO_EXAMPLES.dms;geoActualizarContador();};
+    document.getElementById('geo-chip-polygon').onclick=function(){document.getElementById('geoCoordTa').value=GEO_EXAMPLES.polygon;geoActualizarContador();};
+    document.getElementById('geo-chip-baq').onclick=function(){document.getElementById('geoCoordTa').value=GEO_EXAMPLES.baq;geoActualizarContador();};
+
+    document.querySelectorAll('.geo-tbtn').forEach(function(btn){
+      btn.onclick=function(){document.querySelectorAll('.geo-tbtn').forEach(function(b){b.classList.remove('on');});btn.classList.add('on');geoType=btn.getAttribute('data-gt');};
+    });
+
+    /* Contador de puntos: se actualiza mientras se escribe, para saber si
+       el formato se esta reconociendo sin tener que dibujar el mapa. */
+    var geoTa = document.getElementById('geoCoordTa');
+    function geoActualizarContador() {
+        var txt = geoTa.value.trim();
+        var chip = document.getElementById('geoPointCount');
+        if (!txt) { chip.textContent = '0 puntos detectados'; return; }
+        var c = null;
+        try {
+            var limpio = geoCleanOCR(txt);
+            c = geoParseDDMMSS(limpio);
+            if (!c.length) c = geoParseDMS(limpio);
+            if (!c.length) c = geoParseDecimal(limpio);
+        } catch (e) { c = []; }
+        var total = c ? c.length : 0;
+        chip.textContent = total === 1 ? '1 punto detectado' : total + ' puntos detectados';
+    }
+    geoTa.addEventListener('input', geoActualizarContador);
+
+    document.getElementById('geoClearBtn').onclick = function() {
+        geoTa.value = '';
+        geoActualizarContador();
+        geoClearMessages();
+        document.getElementById('geoMetrics').classList.remove('on');
+        document.getElementById('geoDescCard').classList.remove('on');
+        document.getElementById('geoEmptyState').style.display = '';
+        document.getElementById('geoMapBadge').classList.remove('on');
+        if (geoCurrentLayer && geoMap) { geoMap.removeLayer(geoCurrentLayer); geoCurrentLayer = null; }
+        geoTa.focus();
+    };
+
+    document.getElementById('geoPasteTxtBtn').onclick = function() {
+        if (!navigator.clipboard || !navigator.clipboard.readText) {
+            geoShowErr('Tu navegador no permite leer el portapapeles. Usa Ctrl+V sobre el campo.');
+            return;
+        }
+        navigator.clipboard.readText().then(function(t) {
+            geoTa.value = t.trim();
+            geoActualizarContador();
+        }).catch(function() {
+            geoShowErr('Permiso denegado. Usa Ctrl+V sobre el campo.');
+        });
+    };
+
+    document.getElementById('geoImgFile').onchange=function(e){if(e.target.files[0])geoHandleFile(e.target.files[0]);};
+    var gdz=document.getElementById('geoDropZone');
+    gdz.addEventListener('dragover',function(e){e.preventDefault();gdz.classList.add('over');});
+    gdz.addEventListener('dragleave',function(){gdz.classList.remove('over');});
+    gdz.addEventListener('drop',function(e){e.preventDefault();gdz.classList.remove('over');var f=e.dataTransfer.files[0];if(f&&f.type.startsWith('image/'))geoHandleFile(f);});
+    document.getElementById('geoPasteBtn').onclick=function(e){
+      e.stopPropagation();
+      if(!navigator.clipboard||!navigator.clipboard.read){geoShowErr('Usa Ctrl+V sobre la página.');return;}
+      navigator.clipboard.read().then(function(items){
+        for(var i=0;i<items.length;i++){var types=items[i].types;for(var j=0;j<types.length;j++){if(types[j].startsWith('image/')){(function(it,t){it.getType(t).then(function(b){geoHandleFile(new File([b],'p.png',{type:b.type}));});})(items[i],types[j]);return;}}
+          if(types.indexOf('text/plain')>=0){(function(it){it.getType('text/plain').then(function(b){b.text().then(function(t){document.getElementById('geoCoordTa').value=t;});});})(items[i]);return;}
+        }
+      }).catch(function(){geoShowErr('Permiso denegado. Usa Ctrl+V.');});
+    };
+
+    function geoHandleFile(file){var r=new FileReader();r.onload=function(e){document.getElementById('geoPrevImg').src=e.target.result;document.getElementById('geoPrevWrap').style.display='block';geoRunOCR(file);};r.readAsDataURL(file);}
+    function geoRunOCR(file){if(typeof Tesseract==='undefined'){var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';s.onload=function(){geoDoOCR(file);};s.onerror=function(){geoShowErr('No se pudo cargar OCR.');};document.head.appendChild(s);}else{geoDoOCR(file);}}
+    function geoDoOCR(file){var bw=document.getElementById('geoOcrBarWrap'),bar=document.getElementById('geoOcrBar');bw.style.display='block';geoShowLoad('Leyendo imagen con OCR...');Tesseract.recognize(file,'eng',{logger:function(m){if(m.status==='recognizing text')bar.style.width=(m.progress*100)+'%';}}).then(function(r){bw.style.display='none';geoHideLoad();var raw=r.data.text;document.getElementById('geoOcrRaw').textContent=raw.replace(/\n/g,' ↵ ');document.getElementById('geoOcrPanels').classList.add('on');var coords=geoFullParse(raw);if(coords&&coords.length>0){document.getElementById('geoOcrClean').textContent=coords.map(function(c){return c[0].toFixed(6)+', '+c[1].toFixed(6);}).join('\n');document.getElementById('geoCoordTa').value=coords.map(function(c){return c[0].toFixed(6)+', '+c[1].toFixed(6);}).join('\n');geoActualizarContador();geoShowInfo('OCR: '+coords.length+' coordenada(s) extraída(s).');}else{document.getElementById('geoOcrClean').textContent='— No detectado automáticamente';document.getElementById('geoCoordTa').value=raw.trim();geoActualizarContador();geoShowErr('OCR completado, pero no se reconoció ninguna coordenada. Revisa el texto leído.');}}).catch(function(){bw.style.display='none';geoHideLoad();geoShowErr('Error OCR.');});}
+
+    function geoCleanOCR(raw){var t=raw;t=t.replace(/(\d)\s*\.\s*(\d)/g,'$1.$2');t=t.replace(/([NS])D(\d)/gi,'$10$2');t=t.replace(/(\d(?:\.\d+)?)v(\s|$)/gi,'$1W$2');t=t.replace(/\|\|/g,'\n').replace(/\|/g,'\n');t=t.replace(/\s+(\d{6,9}(?:\.\d+)?\s*[NS])/g,'\n$1');t=t.replace(/[%+]/g,' ').replace(/\bc\b/g,' ');return t;}
+    function geoParseDDMMSSLine(line){var t=line.trim();if(!t)return null;if(/[NS]/i.test(t)&&!/[EW]/i.test(t))t=t+'W';var m=/(\d{4,9}(?:\.\d+)?)\s*([NS])\s*(\d{5,10}(?:\.\d+)?)\s*([EW])/i.exec(t);if(!m)return null;var li=m[1].split('.')[0],gi=m[3].split('.')[0];var lat=+li.slice(0,2)+ +li.slice(2,4)/60+parseFloat((li.slice(4)||'0')+'.'+(m[1].split('.')[1]||'0'))/3600;var lng=+gi.slice(0,3)+ +gi.slice(3,5)/60+parseFloat((gi.slice(5)||'0')+'.'+(m[3].split('.')[1]||'0'))/3600;if(/S/i.test(m[2]))lat=-lat;if(/W/i.test(m[4]))lng=-lng;if(Math.abs(lat)<=90&&Math.abs(lng)<=180)return[+lat.toFixed(6),+lng.toFixed(6)];return null;}
+    function geoParseDDMMSS(text){var out=[];text.split('\n').forEach(function(l){var c=geoParseDDMMSSLine(l);if(c)out.push(c);});return out;}
+    function geoParseDMS(text){var out=[],re=/(\d+)[°º](\d+)['\u2019](\d+(?:\.\d+)?)["\u201d]?\s*([NSns])[,\s]+(\d+)[°º](\d+)['\u2019](\d+(?:\.\d+)?)["\u201d]?\s*([EWew])/gi,m;while((m=re.exec(text))!==null){var lat=+m[1]+ +m[2]/60+ +m[3]/3600;if(/S/i.test(m[4]))lat=-lat;var lng=+m[5]+ +m[6]/60+ +m[7]/3600;if(/W/i.test(m[8]))lng=-lng;if(Math.abs(lat)<=90&&Math.abs(lng)<=180)out.push([lat,lng]);}return out;}
+    function geoParseDecimal(text){var out=[];text.split(/[\n;|]+/).forEach(function(line){var parts=line.replace(/[()°\[\]]/g,'').split(/[\s,]+/).filter(Boolean);if(parts.length>=2){var a=parseFloat(parts[0]),b=parseFloat(parts[1]);if(!isNaN(a)&&!isNaN(b)&&Math.abs(a)<=90&&Math.abs(b)<=180)out.push([a,b]);}});return out;}
+    function geoFullParse(raw){var cleaned=geoCleanOCR(raw),coords,fmt;coords=geoParseDDMMSS(cleaned);fmt='DDMMSS';if(!coords||!coords.length){coords=geoParseDMS(cleaned);fmt='DMS';}if(!coords||!coords.length){coords=geoParseDecimal(cleaned);fmt='Decimal';}if(!coords||!coords.length)return null;geoShowInfo('✓ Formato: '+fmt+' — '+coords.length+' punto(s)');return coords;}
+
+
+    /* ── Radio del círculo ────────────────────────────────────────────────
+       Antes solo se reconocía una forma: "RADIO 5 NM CENTRO <coord>". Pero
+       nadie escribe eso al copiar de un NOTAM; lo natural es poner el radio
+       pegado a la coordenada -"084925.00N0755402.00W 15NM"- y ahí el radio se
+       perdía en silencio: el mapa dibujaba un punto y no avisaba de nada.
+
+       Ahora se acepta el radio en cualquier posición y con las palabras que
+       de verdad aparecen en los NOTAM (RADIO, RADIUS, RAD, R). Los metros
+       exigen la palabra, porque un "1500M" suelto suele ser una altitud, no
+       un radio. */
+    var GEO_RADIO_CON_CENTRO = /(?:RADIO|RADIUS|RAD)\s*\.?\s*([\d]+(?:[.,][\d]+)?)\s*(NM|KM|M)\b[\s,]*(?:CENTRO|CENTRE|CENTER|CENTRADO EN|PSN|POS)?[\s:]*([\d]{6,7}\.?[\d]*[NS][\s,]*[\d]{7,8}\.?[\d]*[EW])/i;
+    var GEO_RADIO_SUELTO   = /(?:^|[\s,;(])(?:RADIO|RADIUS|RAD|R)?\s*\.?\s*([\d]+(?:[.,][\d]+)?)\s*(NM|KM)\b/i;
+    var GEO_RADIO_METROS   = /(?:RADIO|RADIUS|RAD)\s*\.?\s*([\d]+(?:[.,][\d]+)?)\s*(M)\b/i;
+
+    function geoRadioANM(valor, unidad) {
+        var n = parseFloat(String(valor).replace(',', '.'));
+        if (!isFinite(n) || n <= 0) return null;
+        var u = (unidad || 'NM').toUpperCase();
+        if (u === 'KM') return n / 1.852;
+        if (u === 'M') return n / 1852;
+        return n;
+    }
+
+    function geoDetectarRadio(texto) {
+        texto = texto || '';
+        var m = texto.match(GEO_RADIO_CON_CENTRO);
+        if (m) {
+            var nm = geoRadioANM(m[1], m[2]);
+            if (nm) return { nm: nm, centro: m[3] };
+        }
+        m = texto.match(GEO_RADIO_SUELTO) || texto.match(GEO_RADIO_METROS);
+        if (m) {
+            var nm2 = geoRadioANM(m[1], m[2]);
+            if (nm2) return { nm: nm2, centro: null };
+        }
+        return null;
+    }
+
+    function geoPintarCirculo(centro, nm, color) {
+        geoRadiusNM = nm;
+        geoCurrentLayer = L.circle(centro, {
+            radius: nm * 1852, color: color, fillColor: color,
+            fillOpacity: .12, weight: 2, dashArray: '8 5'
+        }).addTo(geoMap);
+        L.circleMarker(centro, {
+            radius: 6, color: color, fillColor: color, fillOpacity: 1, weight: 2
+        }).bindTooltip('Centro: ' + centro[0].toFixed(6) + ', ' + centro[1].toFixed(6)
+            + '<br>Radio: ' + (Math.round(nm * 100) / 100) + ' NM',
+            { permanent: false, direction: 'top', className: 'geo-vtx-tip' }).addTo(geoMap);
+        geoMap.fitBounds(geoCurrentLayer.getBounds(), { padding: [50, 50] });
+    }
+
+    document.getElementById('geoVBtn').onclick=function(){geoVisualize();};
+    function geoVisualize(){
+      geoClearMessages();
+      geoRadiusNM=null;
+      var coords=geoFullParse(document.getElementById('geoCoordTa').value);
+      var raw = document.getElementById('geoCoordTa').value;
+      var radio = geoDetectarRadio(raw);
+      if (radio && radio.centro) {
+          var cParsed = geoFullParse(radio.centro);
+          if (cParsed && cParsed.length > 0) {
+              if (!geoMap) { initGeoMap(); }
+              if (geoCurrentLayer) { geoMap.removeLayer(geoCurrentLayer); geoCurrentLayer = null; }
+              var cLat = cParsed[0][0], cLng = cParsed[0][1];
+              geoPintarCirculo([cLat, cLng], radio.nm, '#f0c000');
+              document.getElementById('geoMapBadge').classList.add('on');
+              document.getElementById('geoMbVal').textContent = cLat.toFixed(5) + ', ' + cLng.toFixed(5);
+              geoShowMetrics([[cLat, cLng]], 'circle');
+              geoFetchDesc([[cLat, cLng]], 'circle', [cLat, cLng]);
+              return;
+          }
+      }
+      if(!coords){geoShowErr("No se detectaron coordenadas válidas.\nFormatos: 084925.00N0755402.00W · 10.9685,-74.7813 · 10°49\'25\"N 75°54\'02\"W");return;}
+      if(!geoMap){initGeoMap();}
+      if(geoCurrentLayer){geoMap.removeLayer(geoCurrentLayer);geoCurrentLayer=null;}
+      var type=geoType;
+      // Con un punto y un radio la figura es un circulo, no un punto suelto.
+      if(type==='auto')type=(coords.length===1&&radio)?'circle':coords.length===1?'point':coords.length===2?'circle':'polygon';
+      var center;
+      if(type==='point'){var lat=coords[0][0],lng=coords[0][1];center=[lat,lng];geoCurrentLayer=L.circleMarker([lat,lng],{radius:10,color:'#3dffa0',fillColor:'#3dffa0',fillOpacity:.35,weight:2.5}).addTo(geoMap);geoCurrentLayer.bindPopup('<b style="color:#3dffa0">'+lat.toFixed(6)+', '+lng.toFixed(6)+'</b>');geoMap.setView([lat,lng],14);}
+      else if(type==='circle'&&coords.length===1){
+          if(!radio){geoShowErr("Para dibujar un círculo con un solo punto hay que indicar el radio.\nEscríbelo al lado de la coordenada, por ejemplo:  084925.00N0755402.00W 15NM");return;}
+          center=[coords[0][0],coords[0][1]];
+          geoPintarCirculo(center,radio.nm,'#00c8f0');
+      }
+      else if(type==='circle'&&coords.length===2){var c1=coords[0],c2=coords[1];center=[(c1[0]+c2[0])/2,(c1[1]+c2[1])/2];var radM=geoMap.distance(c1,c2)/2;geoCurrentLayer=L.circle(center,{radius:radM,color:'#00c8f0',fillColor:'#00c8f0',fillOpacity:.12,weight:2,dashArray:'8 5'}).addTo(geoMap);geoRadiusNM=radM/1852;var radNm=geoRadiusNM.toFixed(2);L.circleMarker(center,{radius:6,color:'#00c8f0',fillColor:'#00c8f0',fillOpacity:1,weight:2}).bindTooltip('Centro: '+center[0].toFixed(6)+', '+center[1].toFixed(6)+'<br>Radio: '+radNm+' NM',{permanent:false,direction:'top',className:'geo-vtx-tip'}).addTo(geoMap);geoMap.fitBounds(geoCurrentLayer.getBounds(),{padding:[50,50]});}
+      else{var lls=coords.map(function(c){return[c[0],c[1]];});center=lls.reduce(function(a,c){return[a[0]+c[0]/lls.length,a[1]+c[1]/lls.length];},[0,0]);geoCurrentLayer=L.polygon(lls,{color:'#3dffa0',fillColor:'#3dffa0',fillOpacity:.13,weight:2,dashArray:'10 5'}).addTo(geoMap);var rawLines=document.getElementById('geoCoordTa').value.trim().split(/\n/).filter(function(l){return l.trim();});lls.forEach(function(ll,i){var rawCoord=rawLines[i]?rawLines[i].trim():(ll[0].toFixed(6)+', '+ll[1].toFixed(6));L.circleMarker(ll,{radius:5,color:'#3dffa0',fillColor:'#1a1a2e',fillOpacity:1,weight:2}).bindTooltip('Vértice '+(i+1)+'<br>'+rawCoord,{permanent:false,direction:'top',className:'geo-vtx-tip'}).addTo(geoMap);});geoMap.fitBounds(geoCurrentLayer.getBounds(),{padding:[60,60]});}
+      document.getElementById('geoMapBadge').classList.add('on');
+      document.getElementById('geoMbVal').textContent=coords[0][0].toFixed(5)+', '+coords[0][1].toFixed(5);
+      geoShowMetrics(coords,type);
+      geoFetchDesc(coords,type,center);
+    }
+    /*
+       Esta funcion llamaba a la API de Anthropic directamente desde el
+       navegador del visitante, sin ninguna credencial en las cabeceras. No
+       fallaba a ratos: no podia funcionar nunca. Faltaba la clave, y aunque
+       hubiera estado ahi el navegador habria bloqueado la peticion por CORS
+       -y una clave metida en el HTML es publica por definicion, se la lleva
+       cualquiera que abra el portal-.
+
+       Ahora se le pregunta al propio portal, que consulta desde el servidor,
+       que es el unico sitio donde una clave puede vivir. Es el mismo camino
+       que ya usaba el boton BOT IA de los METAR.
+    */
+    function geoFetchDesc(coords,type,center){
+      geoShowLoad('Generando análisis de la zona...');
+      var cs = coords.map(function(c){ return c[0].toFixed(6)+','+c[1].toFixed(6); }).join('\n');
+      var url = '/api/analizar_zona?coords=' + encodeURIComponent(cs)
+              + '&tipo=' + encodeURIComponent(type)
+              + (geoRadiusNM ? '&radio_nm=' + geoRadiusNM : '');
+      fetch(url)
+        .then(function(r){
+          if (!r.ok) { throw new Error('HTTP ' + r.status); }
+          return r.json();
+        })
+        .then(function(data){
+          geoShowDesc(data.analisis || 'Sin descripción.', coords, type);
+        })
+        .catch(function(e){
+          geoShowDesc('No se pudo obtener el análisis de la zona (' + e.message + ').\n'
+                    + 'Las mediciones de arriba se calculan en el navegador y no dependen '
+                    + 'de este servicio.', coords, type);
+        })
+        .then(function(){ geoHideLoad(); });
+    }
+    function geoShowDesc(text,coords,type){document.getElementById('geoEmptyState').style.display='none';var card=document.getElementById('geoDescCard');card.classList.add('on');var fmt=text.split('\n').filter(function(l){return l.trim();}).map(function(l){return'<p>'+l.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</p>';}).join('');/* Antes buscaba 'no está disponible' con tilde. El backend responde sin
+             tildes -los mensajes de la API van en ASCII-, asi que el fallo no se
+             detectaba y la tarjeta estampaba 'Análisis completado' encima de un
+             mensaje de error. Se normalizan los acentos antes de comparar. */
+          var fallo=/no est. disponible|no se pudo|no disponible/i
+                      .test(text.normalize('NFD').replace(/[\u0300-\u036f]/g,''));var sello=fallo?'':'<div class="geo-stag">Análisis completado</div>';document.getElementById('geoDescBody').innerHTML=sello+fmt+'<div class="geo-coord-sum"><div class="geo-sum-row"><span class="k">Puntos</span><span class="v">'+coords.length+'</span></div><div class="geo-sum-row"><span class="k">Tipo</span><span class="v">'+type.toUpperCase()+'</span></div><div class="geo-sum-row"><span class="k">Lat</span><span class="v">'+coords[0][0].toFixed(5)+'</span></div><div class="geo-sum-row"><span class="k">Lng</span><span class="v">'+coords[0][1].toFixed(5)+'</span></div></div>';card.scrollIntoView({behavior:'smooth',block:'nearest'});}
+    function geoShowLoad(t){document.getElementById('geoLd').classList.add('on');document.getElementById('geoLd2').classList.add('on');document.getElementById('geoLdTxt').textContent=t;document.getElementById('geoLdTxt2').textContent=t;document.getElementById('geoVBtn').disabled=true;}
+    function geoHideLoad(){document.getElementById('geoLd').classList.remove('on');document.getElementById('geoLd2').classList.remove('on');document.getElementById('geoVBtn').disabled=false;}
+    function geoShowErr(m){document.getElementById('geoErrMsg').textContent=m;document.getElementById('geoErrMsg').classList.add('on');}
+    function geoShowInfo(m){document.getElementById('geoInfoMsg').textContent=m;document.getElementById('geoInfoMsg').classList.add('on');}
+    function geoClearMessages(){document.getElementById('geoErrMsg').classList.remove('on');document.getElementById('geoInfoMsg').classList.remove('on');}
+  })();
+  </script>
+  </div>
+</section>
+
+</main>
+
+<!-- ═══ MODAL IA ═══ -->
+<div id="aiModal" style="display:none;position:fixed;inset:0;background:rgba(7,9,11,0.86);backdrop-filter:blur(10px);z-index:300;align-items:center;justify-content:center;padding:16px;">
+  <div class="ai-modal-shell">
+    <div class="ai-modal-head">
+      <h3 class="ai-modal-title">Analista IA Aeronáutico</h3>
+      <button onclick="cerrarAI()" class="ai-modal-close" aria-label="Cerrar">✕</button>
+    </div>
+    <div id="aiRespuesta" style="padding:26px;color:var(--text-2);line-height:1.85;font-size:0.9rem;max-height:60vh;overflow-y:auto;"></div>
+    <div class="ai-modal-foot">
+      <button onclick="cerrarAI()" class="ai-modal-btn">Entendido</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ FOOTER ═══ -->
+<footer>
+  Portal de Información Aeronáutica &mdash; Colombia AIS &copy; 2026 &nbsp;&bull;&nbsp; Datos: AVWX REST API &amp; AEROCIVIL
+</footer>
+
+</div><!-- /#app -->
+
+<!-- ═══════════════ PDF TEMPLATE ═══════════════ -->
+<div id="molde-pdf" style="display:none;position:absolute;top:-9999px;left:-9999px;">
+  <div id="contenido-imprimible" style="padding:40px;background:#fff;color:#000;font-family:Arial,sans-serif;width:794px;">
+    <div style="text-align:center;border-bottom:2px solid #0f172a;padding-bottom:14px;margin-bottom:20px;">
+      <h1 style="font-size:22px;font-weight:900;margin:0;text-transform:uppercase;">Boletín de Información Previa al Vuelo (PIB)</h1>
+      <p style="margin:5px 0;color:#475569;">Sistema de Gestión de Información Aeronáutica — Colombia</p>
+      <p style="margin:5px 0;font-family:monospace;font-size:11px;font-weight:bold;" id="pdf-hora"></p>
+      <h2 style="font-size:16px;margin-top:12px;font-weight:bold;background:#e2e8f0;padding:5px;" id="pdf-ruta"></h2>
+    </div>
+    <div style="margin-bottom:26px;">
+      <h3 style="font-size:14px;font-weight:bold;text-transform:uppercase;color:#0f172a;border-bottom:1px solid #cbd5e1;padding-bottom:4px;">1. Información Meteorológica (METAR / TAF)</h3>
+      <div id="pdf-clima" style="font-family:monospace;font-size:12px;line-height:1.7;white-space:pre-wrap;margin-top:8px;"></div>
+    </div>
+    <div>
+      <h3 style="font-size:14px;font-weight:bold;text-transform:uppercase;color:#0f172a;border-bottom:1px solid #cbd5e1;padding-bottom:4px;">2. Avisos a los Aviadores (NOTAMs Vigentes)</h3>
+      <table style="width:100%;text-align:left;border-collapse:collapse;margin-top:10px;font-size:11px;">
+        <thead style="background:#f1f5f9;">
+          <tr>
+            <th style="padding:7px;border:1px solid #cbd5e1;width:18%;">ID Oficial</th>
+            <th style="padding:7px;border:1px solid #cbd5e1;width:62%;">Condición / Restricción</th>
+            <th style="padding:7px;border:1px solid #cbd5e1;width:20%;">Actualizado</th>
+          </tr>
+        </thead>
+        <tbody id="pdf-tabla-notams"></tbody>
+      </table>
+    </div>
+    <div style="margin-top:50px;text-align:center;font-size:9px;color:#64748b;border-top:1px dashed #cbd5e1;padding-top:10px;">
+      *** FIN DEL BOLETÍN *** &nbsp; Este documento fue generado automáticamente. Verifique la vigencia antes del vuelo.
+    </div>
+  </div>
+</div>
+<script>
+const AVWX_TOKEN = "9lmNbC4q6YL485yhm-3cUfdX0rP6ksNIRNmPuCBjHl0";
+
+/* ── Escape de HTML y paso de datos a los botones ──
+
+   Habia dos problemas juntos, y el segundo se estaba notando ya:
+
+   1. El texto del NOTAM se insertaba tal cual en innerHTML. Con "<" o "&"
+      dentro, la fila se rompe.
+
+   2. El texto completo viajaba dentro de un atributo:
+          onclick="consultarIA('...el NOTAM entero...')"
+      y solo se escapaban las comillas simples. Seis NOTAMs reales llevan
+      comillas dobles -CENTRO ADM. "MARANDUA"- y ahi el atributo se cierra
+      antes de tiempo: el boton mandaba medio NOTAM a la IA y el resto del
+      texto se derramaba en el DOM como atributos sueltos. Comprobado en el
+      navegador.
+
+   La solucion al segundo no es escapar mejor, es no meter datos en
+   atributos: se guardan en un registro y el boton pasa una clave. */
+const _regTextos = new Map();
+let _regN = 0;
+
+function regGuardar(texto) {
+    const clave = 'n' + (++_regN);
+    _regTextos.set(clave, String(texto == null ? '' : texto));
+    return clave;
+}
+
+window.consultarIAReg = function (clave) {
+    const t = _regTextos.get(clave);
+    if (t) window.consultarIA(t);
+};
+
+function esc(t) {
+    return String(t == null ? '' : t)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/* ── CIERRES Y RESTRICCIONES ──
+   La lista la arma el backend: el criterio de que cuenta como cierre o como
+   limitacion vive en cierres.py, no aqui, para que sea el mismo dato que
+   consumiria cualquier otro cliente. */
+var cieDatos = null, cieFiltro = 'todos';
+
+function cieEsc(t) {
+  return String(t == null ? '' : t)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/* La vigencia viene como AAMMDDHHMM. Sin formatear no la lee nadie. */
+function cieFecha(v) {
+  if (!v) return '';
+  if (/^PERM$/i.test(v)) return 'permanente';
+  if (!/^\d{10}$/.test(v)) return v;
+  return '20' + v.slice(0,2) + '-' + v.slice(2,4) + '-' + v.slice(4,6)
+       + ' ' + v.slice(6,8) + ':' + v.slice(8,10) + 'Z';
+}
+
+window.cieFiltrar = function (boton) {
+  document.querySelectorAll('.cie-filtro').forEach(function (b) { b.classList.remove('on'); });
+  boton.classList.add('on');
+  cieFiltro = boton.dataset.f;
+  cieCargar();
+};
+
+window.cieAlternar = function (cabecera) {
+  cabecera.parentElement.classList.toggle('abierto');
+};
+
+function cieCargar() {
+  var cuerpo = document.getElementById('cieCuerpo');
+  cuerpo.innerHTML = '<div class="empty-state" style="min-height:200px;">'
+                   + '<p>Consultando NOTAMs…</p></div>';
+
+  var q = '/api/cierres';
+  if (cieFiltro === 'cierre')      q += '?severidad=cierre';
+  else if (cieFiltro === 'aerodromos') q += '?ambito=aerodromos';
+  else if (cieFiltro === 'fir')        q += '?ambito=fir';
+
+  fetch(q)
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function (d) { cieDatos = d; ciePintar(d); })
+    .catch(function (e) {
+      cuerpo.innerHTML = '<div class="empty-state" style="min-height:200px;">'
+        + '<p>No se pudieron cargar los cierres (' + cieEsc(e.message) + ').</p></div>';
+      document.getElementById('cieResumen').innerHTML = '';
+    });
+}
+
+function ciePintar(d) {
+  document.getElementById('cieTotal').textContent = d.total + ' restricciones';
+
+  var r = d.resumen;
+  document.getElementById('cieResumen').innerHTML =
+      cieDato(r.cierres, 'Cierres', true)
+    + cieDato(r.limitaciones, 'Limitaciones', false)
+    + cieDato(r.aerodromos_afectados, 'Aeródromos afectados', false)
+    + cieDato(r.notams_fir, 'NOTAMs de FIR', false);
+
+  if (!d.grupos.length) {
+    document.getElementById('cieCuerpo').innerHTML =
+      '<div class="empty-state" style="min-height:200px;"><p>Sin restricciones con este filtro.</p></div>';
+    return;
+  }
+
+  /* Los grupos que cierran algo llegan abiertos: es lo que hay que ver sin
+     tener que pulsar nada. Los demas, plegados.
+
+     Salvo que no haya ninguno que cierre -filtrando por FIR, por ejemplo-:
+     entonces todo salia plegado y la pantalla parecia vacia aunque hubiera
+     57 restricciones debajo. En ese caso se abre el primero. */
+  var hayCierres = d.grupos.some(function (g) { return g.severidad === 'cierre'; });
+  document.getElementById('cieCuerpo').innerHTML = d.grupos.map(function (g, i) {
+    var abierto = (g.severidad === 'cierre' || (!hayCierres && i === 0)) ? ' abierto' : '';
+    return '<div class="cie-grupo ' + g.severidad + abierto + '">'
+      + '<div class="cie-grupo-hdr" onclick="cieAlternar(this)">'
+        + '<span class="cie-marca"></span>'
+        + '<span class="cie-grupo-ttl">' + cieEsc(g.etiqueta) + '</span>'
+        + '<span class="cie-grupo-n">' + g.total + '</span>'
+        + '<svg class="cie-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" '
+        + 'stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>'
+      + '</div>'
+      + '<div class="cie-lista">' + g.notams.map(cieFila).join('') + '</div>'
+    + '</div>';
+  }).join('');
+}
+
+function cieDato(valor, etiqueta, grave) {
+  return '<div class="cie-dato">'
+       + '<div class="cie-dato-val' + (grave && valor > 0 ? ' grave' : '') + '">' + valor + '</div>'
+       + '<div class="cie-dato-lbl">' + etiqueta + '</div></div>';
+}
+
+function cieFila(n) {
+  var vig = '';
+  if (n.vigencia_inicio) {
+    vig = '<span class="cie-vig"> · ' + cieEsc(cieFecha(n.vigencia_inicio))
+        + ' → ' + cieEsc(cieFecha(n.vigencia_fin)) + '</span>';
+  }
+  return '<div class="cie-fila">'
+    + '<div>'
+      + '<div class="cie-ad">' + cieEsc(n.aerodromo) + '</div>'
+      /* En un FIR el nombre extraido y la insignia dicen lo mismo
+         ("FIR/UIR BARRANQUILLA" y "FIR Barranquilla"): sobra uno. */
+      + (n.nombre && !n.es_fir ? '<div class="cie-ad-nombre">' + cieEsc(n.nombre) + '</div>' : '')
+      + (n.es_fir ? '<div class="cie-ad-fir">' + cieEsc(n.ambito) + '</div>' : '')
+    + '</div>'
+    + '<div>'
+      + '<div class="cie-texto">' + cieEsc(n.resumen) + '</div>'
+      + '<div class="cie-id">' + cieEsc(n.id_notam) + vig + '</div>'
+    + '</div>'
+    + '<div class="cie-acc">'
+      + '<button class="btn-ia" onclick="consultarIA(' + JSON.stringify(n.texto).replace(/"/g, '&quot;') + ')">Analizar</button>'
+    + '</div>'
+  + '</div>';
+}
+
+/* ── VIDEO DE FONDO ──
+   Sustituye al pase de siete fotos. Tres cosas que el slideshow no hacia:
+     * Solo se muestra cuando ya puede reproducir, asi no se ve el salto
+       desde el poster.
+     * Si falla la carga o el navegador bloquea el autoplay (iOS en modo de
+       bajo consumo lo hace), se quita y queda el poster. Nunca fondo negro.
+     * Se pausa cuando la pestana deja de estar visible: no tiene sentido
+       decodificar video que nadie esta mirando, sobre todo en portatil. */
+(function () {
+    const video = document.getElementById('bgVideo');
+    if (!video) return;
+
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        video.remove();
+        return;
+    }
+
+    const mostrar = () => video.classList.add('listo');
+    if (video.readyState >= 3) mostrar();
+    else video.addEventListener('canplay', mostrar, { once: true });
+
+    video.addEventListener('error', () => video.remove());
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) video.pause();
+        else video.play().catch(() => {});
+    });
+
+    const intento = video.play();
+    if (intento) intento.catch(() => video.remove());
+})();
+
+/* ── UTC CLOCK ── */
+function updateZulu() {
+    const now = new Date();
+    const z = now.toISOString().substring(8,10) + now.toISOString().substring(11,16).replace(':','') + 'Z';
+    document.getElementById('zuluClock').innerText = `UTC: ${z}`;
+    const hm = now.toISOString().substring(11,16);
+    document.getElementById('heroUtc').innerText = `${hm}Z`;
+}
+setInterval(updateZulu, 1000);
+updateZulu();
+
+/* ── TAB SWITCH ── */
+
+/* ════════════════════════════════════════
+   REGLAMENTOS AERONAUTICOS (RAC)
+   ════════════════════════════════════════
+   Dos cosas que no son casuales:
+
+   1. La respuesta de la IA va arriba, pero el texto literal va SIEMPRE
+      debajo, con su numeral y su fecha de version. Si el modelo se equivoca,
+      el usuario tiene el articulado a la vista para desmentirlo. Un buscador
+      normativo que solo muestre la parafrasis es peor que no tener buscador.
+
+   2. Nada de lo que llega del servidor se inserta sin escapar. El texto de un
+      reglamento trae comillas, "<" y "&" a manton (tablas, formulas,
+      referencias), y cualquiera de esos rompe el HTML si se concatena crudo.
+*/
+var racDocs = null, racBuscando = false;
+
+var RAC_EJEMPLOS = [
+  '¿Con cuánta antelación se presenta el plan de vuelo?',
+  'cierre del plan de vuelo',
+  'aeródromo de alternativa',
+  'combustible mínimo',
+  'espacio aéreo controlado',
+  '91.310'
+];
+
+/* El resaltado viene marcado con dos caracteres de control, no con corchetes:
+   asi el texto del reglamento puede contener lo que sea sin abrir etiquetas.
+   Se escapa PRIMERO y se sustituyen las marcas despues; al reves, un "<" del
+   reglamento se colaria como etiqueta. */
+function racResaltar(txt) {
+  return esc(txt == null ? '' : txt)
+    .replace(/\u0002/g, '<mark>')
+    .replace(/\u0003/g, '</mark>')
+    .replace(/\n/g, ' ');
+}
+
+function racCargarDocs() {
+  fetch('/api/rac/documentos')
+    .then(function (r) {
+      if (r.status === 503) throw new Error('sin-indice');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (d) {
+      racDocs = d.documentos || [];
+      var sel = document.getElementById('racFiltro');
+      sel.innerHTML = '<option value="">Todos los reglamentos</option>'
+        + racDocs.map(function (x) {
+            return '<option value="' + esc(x.rac) + '">RAC ' + esc(x.rac)
+                 + ' · ' + esc(x.titulo) + '</option>';
+          }).join('');
+      document.getElementById('racEstado').textContent =
+        racDocs.length + ' reglamentos indexados';
+    })
+    .catch(function (e) {
+      document.getElementById('racEstado').textContent = 'sin índice';
+      document.getElementById('racCuerpo').innerHTML =
+        '<div class="rac-aviso">' + (e.message === 'sin-indice'
+          ? 'El índice de reglamentos todavía no está construido. En el '
+            + 'servidor: <b>python3 rac_indexar.py</b>'
+          : 'No se pudo consultar el índice de reglamentos (' + esc(e.message) + ').')
+        + '</div>';
+    });
+}
+
+function racPintarEjemplos() {
+  document.getElementById('racEjemplos').innerHTML = RAC_EJEMPLOS.map(function (t, i) {
+    return '<button class="rac-ej" type="button" data-i="' + i + '">' + esc(t) + '</button>';
+  }).join('');
+  document.querySelectorAll('#racEjemplos .rac-ej').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.getElementById('racQ').value = RAC_EJEMPLOS[+b.dataset.i];
+      racBuscar();
+    });
+  });
+}
+
+window.racBuscar = function () {
+  if (racBuscando) return;
+  var q = (document.getElementById('racQ').value || '').trim();
+  var cuerpo = document.getElementById('racCuerpo');
+  if (q.length < 2) {
+    cuerpo.innerHTML = '<div class="rac-aviso">Escriba al menos dos caracteres.</div>';
+    return;
+  }
+
+  var conIA = document.getElementById('racIA').checked;
+  var filtro = document.getElementById('racFiltro').value;
+  var url = (conIA ? '/api/rac/consultar?q=' : '/api/rac/buscar?q=') + encodeURIComponent(q);
+  if (filtro) url += '&rac=' + encodeURIComponent(filtro);
+
+  racBuscando = true;
+  document.getElementById('racBtn').disabled = true;
+  document.getElementById('racConteo').textContent = '';
+  cuerpo.innerHTML = '<div class="empty-state" style="min-height:180px;"><p>'
+    + (conIA ? 'Buscando en los reglamentos y redactando la respuesta…'
+             : 'Buscando en los reglamentos…') + '</p></div>';
+
+  fetch(url)
+    .then(function (r) {
+      if (r.status === 503) throw new Error('sin-indice');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (d) { racPintar(d, q); })
+    .catch(function (e) {
+      cuerpo.innerHTML = '<div class="rac-aviso">' + (e.message === 'sin-indice'
+        ? 'El índice de reglamentos todavía no está construido. En el servidor: '
+          + '<b>python3 rac_indexar.py</b>'
+        : 'No se pudo completar la búsqueda (' + esc(e.message) + ').') + '</div>';
+    })
+    .then(function () {
+      racBuscando = false;
+      document.getElementById('racBtn').disabled = false;
+    });
+};
+
+function racPintar(d, consulta) {
+  var cuerpo = document.getElementById('racCuerpo');
+  var res = d.resultados || [];
+
+  if (!res.length) {
+    cuerpo.innerHTML = '<div class="rac-aviso">'
+      + 'No se encontró ningún apartado para <b>' + esc(consulta) + '</b>.<br>'
+      + 'Pruebe con el término que usaría el reglamento (por ejemplo '
+      + '«alternativa» en vez de «alterno»), o quite el filtro de reglamento.'
+      + '</div>';
+    document.getElementById('racConteo').textContent = '';
+    return;
+  }
+
+  var html = '';
+
+  if (d.respuesta) {
+    html += '<div class="rac-ia">'
+      + '<div class="rac-ia-hdr">Resumen asistido · verifique contra el texto de abajo</div>'
+      + '<div class="rac-ia-txt">' + esc(d.respuesta).replace(/\n/g, '<br>') + '</div>'
+      + '<div class="rac-ia-pie">Redactado únicamente con los '
+      + (d.apartados_consultados || res.length)
+      + ' apartados que aparecen a continuación.</div></div>';
+  } else if (d.error_ia) {
+    html += '<div class="rac-aviso">El resumen automático no está disponible ('
+      + esc(d.error_ia) + '). Abajo están los apartados encontrados.</div>';
+  }
+
+  /* Cuando la busqueda estricta no da nada se reintenta con cualquiera de los
+     terminos. Decirlo evita que el usuario crea que estos resultados
+     contienen todo lo que escribio. */
+  if (d.modo === 'alguno_de_los_terminos') {
+    html += '<div class="rac-aviso">No hay apartados que contengan todos los '
+      + 'términos, así que se muestran los que contienen alguno.</div>';
+  } else if (d.modo === 'completado_con_alguno') {
+    html += '<div class="rac-aviso">Pocos apartados contienen todos los '
+      + 'términos; después de esos se muestran los que contienen alguno.</div>';
+  }
+
+  html += res.map(racFila).join('');
+  cuerpo.innerHTML = html;
+  document.getElementById('racConteo').textContent =
+    res.length + (res.length === 1 ? ' apartado' : ' apartados');
+}
+
+function racFila(r) {
+  var clave = regGuardar('RAC ' + r.rac + ' — ' + r.numeral + ' ' + r.titulo
+                         + '\n\n' + (r.texto || ''));
+  var ubicacion = 'RAC ' + r.rac + ' · versión ' + r.fecha_version
+                + ' · pág. ' + r.pagina + (r.capitulo ? ' · ' + r.capitulo : '');
+  return '<div class="rac-res">'
+    + '<div class="rac-res-hdr">'
+      + '<span class="rac-numeral">' + esc(r.numeral) + '</span>'
+      + '<span class="rac-titulo">' + esc(r.titulo) + '</span>'
+    + '</div>'
+    + '<div class="rac-origen">' + esc(ubicacion) + '</div>'
+    + (r.extracto ? '<div class="rac-extracto">' + racResaltar(r.extracto) + '</div>' : '')
+    + '<div class="rac-acc">'
+      + '<button class="rac-mini" type="button" onclick="racAlternar(this)">Texto completo</button>'
+      + '<button class="rac-mini" type="button" onclick="consultarIAReg(\'' + clave + '\')">Explicar</button>'
+    + '</div>'
+    + '<div class="rac-completo">' + esc(r.texto || '(sin texto)') + '</div>'
+  + '</div>';
+}
+
+window.racAlternar = function (boton) {
+  var caja = boton.closest('.rac-res');
+  caja.classList.toggle('abierto');
+  boton.textContent = caja.classList.contains('abierto')
+    ? 'Ocultar texto' : 'Texto completo';
+};
+
+document.addEventListener('DOMContentLoaded', function () {
+  racPintarEjemplos();
+  var caja = document.getElementById('racQ');
+  if (caja) {
+    caja.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); racBuscar(); }
+    });
+  }
+});
+
+window.switchTab = function(id) {
+    document.querySelectorAll('.tab-content').forEach(c => { c.style.display='none'; c.classList.remove('fade-in'); });
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    const el = document.getElementById('tab-' + id);
+    el.style.display = 'block';
+    void el.offsetWidth;
+    el.classList.add('fade-in');
+    document.getElementById('btn-' + id).classList.add('active');
+    // Los cierres se piden al abrir la pestana y no al cargar la pagina:
+    // recorren los 453 NOTAMs y no hacen falta hasta que se miran.
+    if (id === 'cierres' && !cieDatos) cieCargar();
+    // El catalogo de reglamentos se pide una sola vez, al abrir la pestana.
+    if (id === 'rac' && !racDocs) racCargarDocs();
+};
+
+/* ════════════════════════════════════════
+   FUNCIONALIDADES DEL ORIGINAL index.html
+   ════════════════════════════════════════ */
+
+/* ── IA: Consultar / Cerrar modal ── */
+window.consultarIA = async function(texto) {
+    const modal    = document.getElementById('aiModal');
+    const respuesta = document.getElementById('aiRespuesta');
+    modal.style.display = 'flex';
+    respuesta.innerHTML = `<div style="padding:40px;text-align:center;color:var(--text-3);letter-spacing:0.12em;animation:pulse 1.5s infinite;">CONSULTANDO EXPERTO AIS…</div>`;
+    try {
+        const res  = await fetch(`/api/traducir?texto=${encodeURIComponent(texto)}`);
+        const data = await res.json();
+        respuesta.innerHTML = `<div style="animation:fadeIn 0.3s ease-in-out;">${esc(data.explicacion).replace(/\n/g,'<br>')}</div>`;
+    } catch {
+        respuesta.innerHTML = `<div style="color:var(--danger);font-weight:700;">Error al contactar el motor de IA. Verifique la conexión con el servidor.</div>`;
+    }
+};
+window.cerrarAI = () => { document.getElementById('aiModal').style.display = 'none'; };
+
+/* Un indicador OACI son letras y digitos, nada mas. Lo tecleado terminaba
+   sin comprobar dentro de innerHTML, del id de un elemento y de la URL de
+   AVWX; sanearlo en el origen cubre los tres sitios. */
+function leerIcaos() {
+    const bruto = document.getElementById('icaoInput').value.toUpperCase();
+    const partes = bruto.split(',').map(c => c.trim()).filter(c => c.length > 0);
+    const validos = partes.filter(c => /^[A-Z0-9]{2,5}$/.test(c));
+    return { validos: validos, descartados: partes.filter(c => !validos.includes(c)) };
+}
+
+/* ── METAR / TAF (con botón 🤖 BOT) ── */
+window.fetchAviationData = async function() {
+    const inputVal = document.getElementById('icaoInput').value.toUpperCase().trim();
+    if (!inputVal) return;
+
+    const results  = document.getElementById('resultsDisplay');
+    const empty    = document.getElementById('emptyState');
+    const rawMetar = document.getElementById('rawMetar');
+    const rawTaf   = document.getElementById('rawTaf');
+
+    document.getElementById('btnPdf').style.display = 'flex';
+    empty.style.display = 'none';
+    results.style.display = '';
+    results.classList.remove('fade-in');
+    void results.offsetWidth;
+    results.classList.add('fade-in');
+
+    document.getElementById('dispIcao').innerText = inputVal;
+    rawMetar.innerHTML = '<div class="shimmer" style="height:24px;margin-bottom:8px;border-radius:6px;"></div>';
+    rawTaf.innerHTML   = '<div class="shimmer" style="height:24px;border-radius:6px;"></div>';
+
+    // Sincronizar buscador de NOTAMs y dispararlo
+    document.getElementById('notamUnifiedInput').value = inputVal;
+    fetchNotamsUnified();
+
+    const lectura = leerIcaos();
+    const icaos   = lectura.validos;
+    if (!icaos.length) {
+        empty.style.display = '';
+        results.style.display = 'none';
+        document.getElementById('btnPdf').style.display = 'none';
+        empty.querySelector('p').textContent =
+            'Indicador no válido. Un código OACI son de 2 a 5 letras o dígitos, por ejemplo SKBO.';
+        return;
+    }
+    const headers = { 'Authorization': `Token ${AVWX_TOKEN}` };
+    const antiCache = new Date().getTime();
+
+    rawMetar.innerHTML = '';
+    rawTaf.innerHTML   = '';
+
+    for (const icao of icaos) {
+        rawMetar.innerHTML += `<div id="met-${icao}" style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line);"><strong style="color:#fff;">${esc(icao)}:</strong> Buscando reporte...</div>`;
+        rawTaf.innerHTML   += `<div id="taf-${icao}" style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line);"><strong style="color:#fff;">${esc(icao)}:</strong> Buscando pronóstico...</div>`;
+
+        fetch(`https://avwx.rest/api/metar/${encodeURIComponent(icao)}?options=info&format=json&_=${antiCache}`, { headers })
+            .then(r => r.json())
+            .then(data => {
+                const el = document.getElementById(`met-${icao}`);
+                if (data && data.raw) {
+                    const clave = regGuardar(data.raw);
+                    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+                        <span><strong style="color:var(--ok);">${esc(icao)}</strong><br>${esc(data.raw)}</span>
+                        <button onclick="consultarIAReg('${clave}')" class="btn-ia ia-ok" style="flex-shrink:0;margin-top:2px;">BOT IA</button>
+                    </div>`;
+                } else {
+                    el.innerHTML = `<strong style="color:#fff;">${esc(icao)}:</strong> Estación sin reporte METAR disponible.`;
+                }
+            }).catch(() => { document.getElementById(`met-${icao}`).innerHTML = `<strong style="color:#fff;">${esc(icao)}:</strong> <span style="color:var(--danger);">Error de conexión MET.</span>`; });
+
+        fetch(`https://avwx.rest/api/taf/${encodeURIComponent(icao)}?options=info&format=json&_=${antiCache}`, { headers })
+            .then(r => r.json())
+            .then(data => {
+                const el = document.getElementById(`taf-${icao}`);
+                if (data && data.raw) {
+                    const clave = regGuardar(data.raw);
+                    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+                        <span><strong style="color:var(--accent-hi);">${esc(icao)}</strong><br>${esc(data.raw)}</span>
+                        <button onclick="consultarIAReg('${clave}')" class="btn-ia" style="flex-shrink:0;margin-top:2px;">BOT IA</button>
+                    </div>`;
+                } else {
+                    el.innerHTML = `<strong style="color:#fff;">${esc(icao)}:</strong> <span style="color:var(--text-4);">TAF no disponible para este ciclo.</span>`;
+                }
+            }).catch(() => { document.getElementById(`taf-${icao}`).innerHTML = `<strong style="color:#fff;">${esc(icao)}:</strong> <span style="color:var(--danger);">Error de conexión TAF.</span>`; });
+    }
+};
+
+/* ── BÚSQUEDA UNIFICADA DE NOTAMs (inteligente) ── */
+window.fetchNotamsUnified = async function() {
+    const inputVal = document.getElementById('notamUnifiedInput').value.toUpperCase().trim();
+    if (!inputVal) return;
+
+    const tbody = document.getElementById('notamTableBody');
+    document.getElementById('notamIcaoHeader').innerText = inputVal;
+    tbody.innerHTML = `<tr><td colspan="3" style="padding:40px;text-align:center;color:var(--warn);animation:pulse 1.6s infinite;">Buscando en la base de datos AIS…</td></tr>`;
+
+    try {
+        // ¿Es lista de ICAOs colombianos? (Ej: SKBQ, SKTL)
+        const isIcaoList = inputVal.split(',').every(c => c.trim().startsWith('SK') && c.trim().length === 4);
+        let fetchedNotams = [];
+
+        if (isIcaoList) {
+            // Búsqueda por ICAO exacto
+            const icaos = inputVal.split(',').map(c => c.trim());
+            for (const icao of icaos) {
+                const res = await fetch(`/api/notams/${icao}`);
+                if (res.ok) {
+                    const json = await res.json();
+                    if (json.datos) {
+                        const filtrados = json.datos.filter(n => n.aerodromo.toUpperCase() === icao);
+                        fetchedNotams = fetchedNotams.concat(filtrados);
+                    }
+                }
+            }
+        } else {
+            // Búsqueda global por palabra clave (requiere /api/notams_all)
+            const res = await fetch('/api/notams_all');
+            if (res.ok) {
+                const json = await res.json();
+                if (json.datos) {
+                    fetchedNotams = json.datos.filter(n =>
+                        n.texto.toUpperCase().includes(inputVal) ||
+                        n.id_notam.toUpperCase().includes(inputVal) ||
+                        n.aerodromo.toUpperCase().includes(inputVal)
+                    );
+                }
+            } else {
+                tbody.innerHTML = `<tr><td colspan="3" style="padding:40px;text-align:center;color:var(--danger);font-weight:700;">⚠ Falta habilitar <code>/api/notams_all</code> en el servidor Python.</td></tr>`;
+                return;
+            }
+        }
+
+        // Eliminar duplicados por id_notam y renderizar
+        const unicos = Array.from(new Map(fetchedNotams.map(item => [item.id_notam, item])).values());
+        renderNotamsTable(unicos);
+
+    } catch (e) {
+        console.error(e);
+        tbody.innerHTML = `<tr><td colspan="3" style="padding:40px;text-align:center;color:var(--danger);font-weight:700;">Error de conexión con la base de datos local.</td></tr>`;
+    }
+};
+
+/* ── RENDERIZADOR DE TABLA DE NOTAMs (reutilizable) ── */
+function renderNotamsTable(notamsList) {
+    const tbody = document.getElementById('notamTableBody');
+    if (!notamsList.length) {
+        tbody.innerHTML = `<tr><td colspan="3" style="padding:40px;text-align:center;color:var(--text-4);">No se encontraron NOTAMs que coincidan con su búsqueda.</td></tr>`;
+        return;
+    }
+    tbody.innerHTML = notamsList.map(n => {
+        const clave = regGuardar(n.texto);
+        return `<tr>
+            <td>
+                <span class="notam-id-tag">${esc(n.id_notam)}</span><br>
+                <span class="notam-aero-chip" style="margin-top:6px;display:inline-block;">${esc(n.aerodromo)}</span>
+            </td>
+            <td class="notam-body">${esc(n.texto)}</td>
+            <td style="text-align:right;vertical-align:top;">
+                <button onclick="consultarIAReg('${clave}')" class="btn-ia">Analizar</button>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+/* ── AERÓDROMOS (lista AIP actualizada con 31 aeródromos + alertas AD CLSD) ── */
+/* Directorio de aerodromos.
+
+   Cuatro codigos OACI estaban equivocados, todos por letras cambiadas de
+   sitio, y el efecto no era cosmetico: la alerta de cierre se busca por
+   codigo, asi que Popayan podia estar cerrado y la tabla no decia nada.
+
+       SKPV -> SKPP   Popayan / Guillermo Leon Valencia
+       SKGI -> SKUC   Arauca / Santiago Perez Quiroz
+       SKPI -> SKIP   Ipiales / San Luis
+       SKAP -> SKLC   Carepa / Antonio Roldan Betancourt (SKAP es Apiay)
+
+   Los nombres y ciudades de los aerodromos anadidos salen de los propios
+   NOTAM de la Aerocivil, que los escribe como "CIUDAD/NOMBRE (ICAO)".
+   El horario no viaja en el NOTAM: los que faltan quedan con una raya en
+   vez de un dato inventado. */
+const ads = [
+    {icao:"SKAN",nombre:"Pablo Tobon Uribe Antes San Pa",ciudad:"Medellín"            ,horario:"—"},
+    {icao:"SKAP",nombre:"Apiay - Fac"                   ,ciudad:"Apiay"               ,horario:"—"},
+    {icao:"SKAR",nombre:"El Edén"                       ,ciudad:"Armenia"             ,horario:"1100-0300"},
+    {icao:"SKAS",nombre:"Puerto Asis - Tres de Mayo"    ,ciudad:"Puerto Asís"         ,horario:"—"},
+    {icao:"SKBG",nombre:"Palonegro"                     ,ciudad:"Bucaramanga"         ,horario:"1100-0500"},
+    {icao:"SKBO",nombre:"El Dorado Luis Carlos Galán"   ,ciudad:"Bogotá"              ,horario:"H24"},
+    {icao:"SKBQ",nombre:"Ernesto Cortissoz"             ,ciudad:"Barranquilla"        ,horario:"H24"},
+    {icao:"SKBS",nombre:"Bahia Solano - Jose C. Mutis"  ,ciudad:"Bahía Solano"        ,horario:"—"},
+    {icao:"SKBU",nombre:"Buenaventura - Gerardo Tobar L",ciudad:"Buenaventura"        ,horario:"—"},
+    {icao:"SKCC",nombre:"Camilo Daza"                   ,ciudad:"Cúcuta"              ,horario:"1030-0500"},
+    {icao:"SKCG",nombre:"Rafael Núñez"                  ,ciudad:"Cartagena"           ,horario:"H24"},
+    {icao:"SKCL",nombre:"Alfonso Bonilla Aragón"        ,ciudad:"Cali"                ,horario:"H24"},
+    {icao:"SKCO",nombre:"Tumaco - la Florida"           ,ciudad:"San Andrés de Tumaco",horario:"—"},
+    {icao:"SKCZ",nombre:"Las Brujas"                    ,ciudad:"Corozal"             ,horario:"1100-2300"},
+    {icao:"SKEJ",nombre:"Yariguíes"                     ,ciudad:"Barrancabermeja"     ,horario:"1100-0300"},
+    {icao:"SKFL",nombre:"Gustavo Artunduaga Paredes"    ,ciudad:"Florencia"           ,horario:"1100-2300"},
+    {icao:"SKGB",nombre:"Marco Fidel Suarez AFB"        ,ciudad:"Santiago de Cali"    ,horario:"—"},
+    {icao:"SKGI",nombre:"Santiago Vila"                 ,ciudad:"Flandes"             ,horario:"—"},
+    {icao:"SKGO",nombre:"Santa Ana - Valle"             ,ciudad:"Cartago"             ,horario:"—"},
+    {icao:"SKGP",nombre:"Guapi - Juan Casiano"          ,ciudad:"Guapi"               ,horario:"—"},
+    {icao:"SKGY",nombre:"Guaymaral"                     ,ciudad:"Chía"                ,horario:"—"},
+    {icao:"SKIB",nombre:"Perales"                       ,ciudad:"Ibagué"              ,horario:"1100-0300"},
+    {icao:"SKIP",nombre:"San Luis"                      ,ciudad:"Ipiales"             ,horario:"1100-2300"},
+    {icao:"SKJC",nombre:"Juanchaco"                     ,ciudad:"Buenaventura"        ,horario:"—"},
+    {icao:"SKLC",nombre:"Antonio Roldán Betancourt"     ,ciudad:"Carepa"            ,horario:"1100-2300"},
+    {icao:"SKLG",nombre:"Puerto Leguizamo"              ,ciudad:"Puerto Leguízamo"    ,horario:"—"},
+    {icao:"SKLT",nombre:"Alfredo Vásquez Cobo"          ,ciudad:"Leticia"             ,horario:"1100-2300"},
+    {icao:"SKMB",nombre:"Timbiqui"                      ,ciudad:"Timbiquí"            ,horario:"—"},
+    {icao:"SKMD",nombre:"Olaya Herrera"                 ,ciudad:"Medellín"            ,horario:"1030-2300"},
+    {icao:"SKMG",nombre:"Magangue - Baracoa"            ,ciudad:"Magangué"            ,horario:"—"},
+    {icao:"SKMR",nombre:"Los Garzones"                  ,ciudad:"Montería"            ,horario:"1100-0500"},
+    {icao:"SKMU",nombre:"Mitu"                          ,ciudad:"Mitú"                ,horario:"—"},
+    {icao:"SKMZ",nombre:"La Nubia"                      ,ciudad:"Manizales"           ,horario:"1100-2300"},
+    {icao:"SKNA",nombre:"La Macarena - el Refugio"      ,ciudad:"La Macarena"         ,horario:"—"},
+    {icao:"SKNQ",nombre:"Nuqui - Reyes Murillo"         ,ciudad:"Nuquí"               ,horario:"—"},
+    {icao:"SKNV",nombre:"Benito Salas"                  ,ciudad:"Neiva"               ,horario:"1100-0500"},
+    {icao:"SKPB",nombre:"Puerto Bolivar - Portete"      ,ciudad:"Uribia"              ,horario:"—"},
+    {icao:"SKPC",nombre:"German Olano"                  ,ciudad:"Puerto Carreño"      ,horario:"—"},
+    {icao:"SKPD",nombre:"Cesar Gaviria Trujillo"        ,ciudad:"Puerto Inirida"      ,horario:"—"},
+    {icao:"SKPE",nombre:"Matecaña"                      ,ciudad:"Pereira"             ,horario:"1100-0500"},
+    {icao:"SKPI",nombre:"Pitalito -contador"            ,ciudad:"Pitalito"            ,horario:"—"},
+    {icao:"SKPP",nombre:"Guillermo León Valencia"       ,ciudad:"Popayán"             ,horario:"1100-2300"},
+    {icao:"SKPQ",nombre:"Palanquero"                    ,ciudad:"Puerto Salgar"       ,horario:"—"},
+    {icao:"SKPS",nombre:"Antonio Nariño"                ,ciudad:"Pasto"               ,horario:"1100-0300"},
+    {icao:"SKQU",nombre:"Jose Celestino Mutis - Mariqui",ciudad:"San Sebastián de Mar",horario:"—"},
+    {icao:"SKRG",nombre:"José María Córdova"            ,ciudad:"Rionegro"            ,horario:"H24"},
+    {icao:"SKRH",nombre:"Almirante Padilla"             ,ciudad:"Riohacha"            ,horario:"1100-0400"},
+    {icao:"SKSA",nombre:"Saravena-colonizadores"        ,ciudad:"Saravena"            ,horario:"—"},
+    {icao:"SKSJ",nombre:"San Jose del Guaviare- Jorge E",ciudad:"San José del Guaviar",horario:"—"},
+    {icao:"SKSM",nombre:"Simón Bolívar"                 ,ciudad:"Santa Marta"         ,horario:"1100-0400"},
+    {icao:"SKSP",nombre:"Gustavo Rojas Pinilla"         ,ciudad:"San Andrés"          ,horario:"H24"},
+    {icao:"SKSV",nombre:"San Vicente del Caguan"        ,ciudad:"San Vicente del Cagu",horario:"—"},
+    {icao:"SKTB",nombre:"Tibu"                          ,ciudad:"Tibú"                ,horario:"—"},
+    {icao:"SKTL",nombre:"Golfo de Morrosquillo"         ,ciudad:"Tolú"                ,horario:"1100-2300"},
+    {icao:"SKTM",nombre:"Gabriel Vargas Santos"         ,ciudad:"Tame"                ,horario:"—"},
+    {icao:"SKTQ",nombre:"Tres Esquinas Ab"              ,ciudad:"Solano"              ,horario:"—"},
+    {icao:"SKUA",nombre:"Centro Adm. MARANDUA"          ,ciudad:"Santa Rita - Vichada",horario:"—"},
+    {icao:"SKUC",nombre:"Santiago Pérez Quiroz"         ,ciudad:"Arauca"              ,horario:"1100-2300"},
+    {icao:"SKUI",nombre:"El Caraño"                     ,ciudad:"Quibdó"              ,horario:"1100-0300"},
+    {icao:"SKVL",nombre:"Velasquez"                     ,ciudad:"Puerto Boyacá"       ,horario:"—"},
+    {icao:"SKVP",nombre:"Alfonso López Pumarejo"        ,ciudad:"Valledupar"          ,horario:"1100-0300"},
+    {icao:"SKVV",nombre:"Vanguardia"                    ,ciudad:"Villavicencio"       ,horario:"1100-0500"},
+    {icao:"SKYP",nombre:"El Alcaraván"                  ,ciudad:"Yopal"               ,horario:"1100-0300"}
+];
+
+let allKnownNotams = [];
+
+/* El cuerpo del NOTAM es lo que va tras la coma que cierra la vigencia.
+   Es la parte que dice que esta pasando; el resto es cabecera. */
+function adCuerpoNotam(t) {
+    const s = String(t || '').trim();
+    if (s.includes(' , ')) {
+        const cuerpo = s.split(' , ').slice(1).join(' , ').trim();
+        if (cuerpo.length >= 8) return cuerpo;
+    }
+    return s;
+}
+
+/* AAMMDDHHMM -> algo legible. PERM se queda como esta. */
+function adFecha(v) {
+    if (!v) return '';
+    if (/^PERM$/i.test(v)) return 'permanente';
+    return '20' + v.slice(0,2) + '-' + v.slice(2,4) + '-' + v.slice(4,6)
+         + ' ' + v.slice(6,8) + ':' + v.slice(8,10) + 'Z';
+}
+
+function adVigencia(t) {
+    const m = String(t || '').match(/\b(\d{10})\s*\/\s*(\d{10}|PERM)\b/i);
+    return m ? (adFecha(m[1]) + '  →  ' + adFecha(m[2])) : '';
+}
+
+function adEsc(t) {
+    return String(t == null ? '' : t)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/* El globo va en position:fixed para escapar del overflow de la tarjeta,
+   asi que hay que darle coordenadas a mano. Si no cabe debajo, se pone
+   encima; si se sale por la derecha, se pega al borde. */
+function adTipGlobal() {
+    let t = document.getElementById('adTip');
+    if (!t) {
+        t = document.createElement('div');
+        t.id = 'adTip';
+        document.body.appendChild(t);   // cuelga de body, sin ancestros que estorben
+    }
+    return t;
+}
+
+window.adAbrirTip = function (envoltura) {
+    const origen = envoltura.querySelector('.ad-tip');
+    if (!origen) return;
+    const tip = adTipGlobal();
+    tip.innerHTML = origen.innerHTML;
+    tip.classList.add('visible');
+
+    const r = envoltura.getBoundingClientRect();
+    const t = tip.getBoundingClientRect();
+    let izq = r.left;
+    if (izq + t.width > window.innerWidth - 12) izq = window.innerWidth - t.width - 12;
+    if (izq < 12) izq = 12;
+    let arriba = r.bottom + 8;
+    if (arriba + t.height > window.innerHeight - 12) arriba = r.top - t.height - 8;
+    if (arriba < 12) arriba = 12;
+    tip.style.left = izq + 'px';
+    tip.style.top  = arriba + 'px';
+};
+
+window.adCerrarTip = function () {
+    const t = document.getElementById('adTip');
+    if (t) t.classList.remove('visible');
+};
+
+function renderADTable(listaADs, listaNotams) {
+    document.getElementById('adTableBody').innerHTML = listaADs.map((a, i) => {
+        const cierre = listaNotams.filter(n => n.aerodromo.toUpperCase() === a.icao && n.texto.includes("AD CLSD"));
+        let alerta = "";
+        if (cierre.length > 0) {
+            const ids = cierre.map(n => n.id_notam).join(", ");
+            /* El globo lleva el texto del NOTAM, no solo su numero: saber
+               que un aerodromo esta cerrado sirve de poco si hay que ir a
+               otra pestana a averiguar por que y hasta cuando. */
+            const detalle = cierre.map(n => {
+                const vig = adVigencia(n.texto);
+                return '<div class="ad-tip-item">'
+                     + '<div class="ad-tip-id">' + adEsc(n.id_notam) + '</div>'
+                     + '<div class="ad-tip-txt">' + adEsc(adCuerpoNotam(n.texto)) + '</div>'
+                     + (vig ? '<div class="ad-tip-vig">' + adEsc(vig) + '</div>' : '')
+                     + '</div>';
+            }).join('');
+            alerta = '<br><span class="ad-alert-wrap" tabindex="0"'
+                   + ' onmouseenter="adAbrirTip(this)" onmouseleave="adCerrarTip()"'
+                   + ' onfocus="adAbrirTip(this)" onblur="adCerrarTip()">'
+                   + '<span class="ad-alert">AD CLSD VIGENTE (' + adEsc(ids) + ')</span>'
+                   + '<span class="ad-tip">' + detalle + '</span>'
+                   + '</span>';
+        }
+        const horario = a.horario === '—'
+            ? '<span class="ad-sin-horario" title="Sin horario publicado en esta tabla">—</span>'
+            : adEsc(a.horario);
+        return `<tr>
+            <td><span class="icao-tag">${adEsc(a.icao)}</span></td>
+            <td>${adEsc(a.nombre)}</td>
+            <td class="city-sub">${adEsc(a.ciudad)}</td>
+            <td class="ad-horario">${horario}${alerta}</td>
+        </tr>`;
+    }).join('');
+}
+
+async function populateAD() {
+    renderADTable(ads, []);
+    try {
+        const res = await fetch('/api/notams_all');
+        if (res.ok) {
+            const json = await res.json();
+            if (json.datos) {
+                allKnownNotams = json.datos;
+                renderADTable(ads, allKnownNotams);
+            }
+        }
+    } catch(e) { console.warn("Alertas AD CLSD no disponibles:", e); }
+}
+
+window.searchAD = function() {
+    const q = document.getElementById('adSearch').value.toUpperCase();
+    const f = ads.filter(a => a.icao.includes(q) || a.nombre.toUpperCase().includes(q) || a.ciudad.toUpperCase().includes(q));
+    renderADTable(f, allKnownNotams);
+};
+
+/* ── PDF (versión mejorada del original: fetch fresco, pagebreak) ── */
+window.generarPDF = async function() {
+    const btn = document.getElementById('btnPdf');
+    const textoOriginal = btn.innerHTML;
+    btn.innerHTML = '<span>EXTRAYENDO…</span>';
+
+    const inputVal  = document.getElementById('icaoInput').value.toUpperCase().trim();
+    const icaos     = leerIcaos().validos;
+    const headers   = { 'Authorization': `Token ${AVWX_TOKEN}` };
+    const antiCache = new Date().getTime();
+
+    try {
+        let todosLosNotams = [];
+        let climaHtml = "";
+
+        for (const icao of icaos) {
+            try {
+                const resN = await fetch(`/api/notams/${icao}`);
+                const jsonN = await resN.json();
+                if (jsonN.datos) {
+                    const filtrados = jsonN.datos.filter(n => n.aerodromo.toUpperCase() === icao);
+                    todosLosNotams = todosLosNotams.concat(filtrados);
+                }
+            } catch(e) { console.error("Error NOTAMs PDF", e); }
+
+            let metStr = "Estación sin reporte METAR disponible.";
+            let tafStr = "Estación sin pronóstico TAF disponible.";
+            try {
+                const resM = await fetch(`https://avwx.rest/api/metar/${encodeURIComponent(icao)}?format=json&_=${antiCache}`, { headers });
+                if (resM.ok) { const d = await resM.json(); if (d && d.raw) metStr = d.raw; }
+            } catch(e) {}
+            try {
+                const resT = await fetch(`https://avwx.rest/api/taf/${encodeURIComponent(icao)}?format=json&_=${antiCache}`, { headers });
+                if (resT.ok) { const d = await resT.json(); if (d && d.raw) tafStr = d.raw.replace(/\n/g,'<br>'); }
+            } catch(e) {}
+
+            climaHtml += `<div style="margin-bottom:14px;"><strong>${icao} METAR:</strong><br><span style="color:#334155;">${esc(metStr)}</span></div>`;
+            climaHtml += `<div style="margin-bottom:14px;"><strong>${icao} TAF:</strong><br><span style="color:#334155;">${esc(tafStr)}</span></div><hr style="border:0;border-top:1px solid #e2e8f0;margin:10px 0;">`;
+        }
+
+        const notamsHtml = todosLosNotams.length > 0
+            ? todosLosNotams.map(n => `
+                <tr class="notam-row" style="border-bottom:1px solid #e2e8f0;">
+                    <td style="padding:6px 8px;border-right:1px solid #e2e8f0;font-weight:700;vertical-align:top;white-space:nowrap;">${esc(n.id_notam)}</td>
+                    <td style="padding:6px 8px;border-right:1px solid #e2e8f0;vertical-align:top;">${esc(n.texto)}</td>
+                    <td style="padding:6px 8px;text-align:center;vertical-align:top;">${esc(n.aerodromo)}</td>
+                </tr>`).join('')
+            : `<tr><td colspan="3" style="text-align:center;padding:12px;color:#64748b;">No hay NOTAMs vigentes para la estación solicitada.</td></tr>`;
+
+        const htmlDoc = `
+            <div style="padding:30px;font-family:Courier,monospace;color:#0f172a;background:#fff;font-size:11px;">
+                <div style="text-align:center;border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:20px;">
+                    <h2 style="margin:0;font-size:16px;">BOLETÍN DE INFORMACIÓN PREVIA AL VUELO (PIB)</h2>
+                    <p style="margin:4px 0;">Portal Colombia AIS / MET</p>
+                    <p style="margin:4px 0;">FECHA EMISIÓN: ${new Date().toUTCString()}</p>
+                    <h3 style="margin:6px 0;font-size:13px;">ESTACIONES: ${inputVal}</h3>
+                </div>
+                <h3 style="background:#e2e8f0;padding:5px 8px;font-size:12px;">1. INFORMACIÓN METEOROLÓGICA</h3>
+                <div style="margin:14px 0;">${climaHtml}</div>
+                <h3 style="background:#e2e8f0;padding:5px 8px;font-size:12px;">2. AVISOS A LOS AVIADORES (NOTAMs VIGENTES)</h3>
+                <table style="width:100%;border-collapse:collapse;margin-top:10px;border:1px solid #0f172a;">
+                    <thead>
+                        <tr style="border-bottom:2px solid #0f172a;background:#f8fafc;">
+                            <th style="padding:6px 8px;border-right:1px solid #0f172a;width:15%;text-align:left;">ID</th>
+                            <th style="padding:6px 8px;border-right:1px solid #0f172a;width:75%;text-align:left;">Texto</th>
+                            <th style="padding:6px 8px;width:10%;text-align:center;">AD</th>
+                        </tr>
+                    </thead>
+                    <tbody>${notamsHtml}</tbody>
+                </table>
+                <div style="text-align:center;margin-top:30px;font-weight:700;font-size:10px;">*** FIN DEL BOLETÍN ***</div>
+            </div>`;
+
+        await html2pdf().set({
+            margin: 0.4,
+            filename: `PIB_${inputVal.replace(/,/g,'_').replace(/ /g,'')}.pdf`,
+            image: { type:'jpeg', quality:1.0 },
+            html2canvas: { scale:2 },
+            jsPDF: { unit:'in', format:'letter', orientation:'portrait' },
+            pagebreak: { mode:['avoid-all','css','legacy'], avoid:'tr.notam-row' }
+        }).from(htmlDoc).save();
+
+        btn.innerHTML = textoOriginal;
+    } catch(error) {
+        console.error(error);
+        alert("Error crítico al generar el reporte PDF.");
+        btn.innerHTML = textoOriginal;
+    }
+};
+
+/* ── ENTER KEY ── */
+document.getElementById('icaoInput').addEventListener('keydown', e => { if (e.key==='Enter') fetchAviationData(); });
+
+/* ── THEME ── */
+window.toggleTheme = function() {
+    const isLight = document.body.classList.contains('light');
+    document.body.classList.toggle('light', !isLight);
+    localStorage.setItem('theme', isLight ? 'dark' : 'light');
+};
+(function(){ if (localStorage.getItem('theme') === 'light') document.body.classList.add('light'); })();
+
+/* ── INIT ── */
+window.onload = () => { updateZulu(); populateAD(); };
+</script>
+
+<!-- ═══ THEME FAB ═══ -->
+<button id="themeFab" style="color:var(--accent)" onclick="toggleTheme()" aria-label="Cambiar tema claro/oscuro" title="Cambiar tema">
+  <!-- Icono Luna (modo oscuro activo) -->
+  <svg class="fab-icon-dark" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+  </svg>
+  <!-- Icono Sol (modo claro activo) -->
+  <svg class="fab-icon-light" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="5"/>
+    <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+    <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+  </svg>
+</button>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   Microinteracciones — indicador de pestañas, resplandor de
+   tarjetas, barra al desplazar y aparición escalonada.
+   Se ejecuta al final: no reemplaza ninguna función existente,
+   solo la envuelve.
+   ═══════════════════════════════════════════════════════════════ */
+(function () {
+    'use strict';
+
+    var reducido = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    /* ── 1. Indicador deslizante de las pestañas ────────────────
+       Un único bloque que viaja de una pestaña a otra, en vez de
+       que cada botón encienda y apague su propio fondo.          */
+    var rail = document.querySelector('.tab-rail');
+    var indicador = null;
+
+    if (rail) {
+        indicador = document.createElement('span');
+        indicador.className = 'tab-indicator';
+        rail.insertBefore(indicador, rail.firstChild);
+    }
+
+    function moverIndicador() {
+        if (!rail || !indicador) return;
+        var activo = rail.querySelector('.tab-btn.active');
+        if (!activo) { indicador.classList.remove('ready'); return; }
+        indicador.style.width = activo.offsetWidth + 'px';
+        indicador.style.transform = 'translateX(' + activo.offsetLeft + 'px)';
+        indicador.classList.add('ready');
+    }
+
+    /* ── 2. Resplandor que sigue al cursor sobre las tarjetas ─── */
+    function seguirCursor(e) {
+        var r = this.getBoundingClientRect();
+        this.style.setProperty('--mx', ((e.clientX - r.left) / r.width * 100) + '%');
+        this.style.setProperty('--my', ((e.clientY - r.top) / r.height * 100) + '%');
+    }
+
+    function activarTarjetas(raiz) {
+        (raiz || document).querySelectorAll('.card').forEach(function (c) {
+            if (c.dataset.glow) return;
+            c.dataset.glow = '1';
+            c.addEventListener('mousemove', seguirCursor);
+        });
+    }
+
+    /* ── 3. Aparición escalonada ────────────────────────────────
+       Cada hijo directo entra con un retardo creciente, de modo
+       que la vista se "arma" en lugar de aparecer de golpe.      */
+    function revelar(contenedor) {
+        if (reducido || !contenedor) return;
+        var hijos = contenedor.querySelectorAll(':scope > .card, :scope > * > .card, :scope > .met-layout > *');
+        var i = 0;
+        hijos.forEach(function (el) {
+            el.classList.remove('in');
+            el.classList.add('reveal');
+            var retardo = Math.min(i * 70, 350);
+            i++;
+            setTimeout(function () { el.classList.add('in'); }, retardo);
+        });
+    }
+
+    /* ── 4. Estado de la barra superior al desplazar ──────────── */
+    var navbar = document.querySelector('.navbar');
+    var ultimo = -1;
+    function alDesplazar() {
+        if (!navbar) return;
+        var y = window.scrollY > 12 ? 1 : 0;
+        if (y === ultimo) return;
+        ultimo = y;
+        navbar.classList.toggle('is-scrolled', y === 1);
+    }
+    window.addEventListener('scroll', alDesplazar, { passive: true });
+
+    /* ── 5. Envolver switchTab sin reemplazar su comportamiento ─ */
+    var switchOriginal = window.switchTab;
+    if (typeof switchOriginal === 'function') {
+        window.switchTab = function (id) {
+            switchOriginal.call(this, id);
+            moverIndicador();
+            var seccion = document.getElementById('tab-' + id);
+            activarTarjetas(seccion);
+            revelar(seccion);
+        };
+    }
+
+    /* ── 6. Arranque ────────────────────────────────────────────
+       Se espera a que las fuentes carguen: con tipografía variable,
+       medir antes deja el indicador descuadrado.                 */
+    function iniciar() {
+        activarTarjetas(document);
+        alDesplazar();
+        moverIndicador();
+        revelar(document.querySelector('.tab-content:not([style*="none"])'));
+    }
+
+    if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function () { setTimeout(iniciar, 30); });
+    } else {
+        setTimeout(iniciar, 120);
+    }
+    window.addEventListener('load', moverIndicador);
+    window.addEventListener('resize', moverIndicador);
+
+    /* Las tablas se repueblan por JS: reengancha el resplandor. */
+    var obs = new MutationObserver(function () { activarTarjetas(document); });
+    obs.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
+</body>

@@ -1,0 +1,49 @@
+[Unit]
+Description=API NOTAMs Colombia
+Documentation=https://github.com/<usuario>/portal-notams-colombia
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/proyecto_notams
+
+# Carga las variables de entorno (claves API, puertos, CORS).
+# El guion inicial hace que el servicio arranque aunque el archivo no exista.
+EnvironmentFile=-/home/ubuntu/proyecto_notams/.env
+
+# ANTES: --host 0.0.0.0  ->  la API quedaba expuesta directamente en el puerto
+# 8000, saltandose nginx. Ahora solo escucha en loopback y el unico camino de
+# entrada es el proxy inverso.
+ExecStart=/usr/bin/python3 -m uvicorn api_notams:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --proxy-headers \
+    --forwarded-allow-ips=127.0.0.1
+
+Restart=always
+RestartSec=3
+
+# Reinicio con freno: si el servicio entra en bucle de fallos, systemd deja de
+# reintentar en vez de consumir CPU indefinidamente.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# --- Endurecimiento basico ---
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/proyecto_notams
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=notams-api
+
+[Install]
+WantedBy=multi-user.target

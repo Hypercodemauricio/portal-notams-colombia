@@ -1,0 +1,18 @@
+# /etc/logrotate.d/notams
+#
+# El cron.log original llego a 3,4 MB sin rotacion y crecia indefinidamente.
+# El extractor nuevo ya rota su propio log, esto cubre cualquier salida
+# residual del cron.
+
+/home/ubuntu/proyecto_notams/logs/*.log
+/home/ubuntu/proyecto_notams/cron.log {
+    weekly
+    rotate 4
+    size 5M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su ubuntu ubuntu
+}

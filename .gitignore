@@ -1,0 +1,43 @@
+# ---- Secretos: NUNCA subir ----
+.env
+*.pem
+*.key
+credenciales*
+llave-aws*
+
+# ---- Datos generados ----
+*.db
+*.db.tmp
+*.db.prev
+*.sqlite
+*.sqlite3
+charlie1_temporal.pdf
+*.pdf
+rac_pdf/          # PDF de los RAC: se descargan, no se versionan
+
+# ---- Logs ----
+logs/
+*.log
+cron.log
+nohup.out
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+
+# ---- Copias de seguridad y basura ----
+*.bak
+*.orig
+*_backup.py
+*_backup_*.py
+*.tmp
+.DS_Store
+Thumbs.db
+
+# ---- Editores ----
+.vscode/
+.idea/

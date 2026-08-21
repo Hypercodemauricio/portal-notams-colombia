@@ -1,0 +1,17 @@
+# Versiones fijadas a partir de las instaladas en el servidor de produccion
+# (Ubuntu 24.04, Python 3.12.3) el 2026-08-16.
+
+# --- API ---
+fastapi==0.135.1
+uvicorn==0.41.0
+starlette==0.52.1
+pydantic==2.12.5
+
+# --- Analista IA ---
+google-generativeai==0.8.6
+
+# --- Extractor ---
+selenium==4.41.0
+webdriver-manager==4.0.2
+pdfplumber==0.11.9
+requests==2.32.5
