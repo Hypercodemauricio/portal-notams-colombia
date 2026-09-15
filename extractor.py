@@ -27,6 +27,14 @@ from logging.handlers import RotatingFileHandler
 import requests
 import pdfplumber
 import urllib3
+
+# El cron no pasa por systemd, asi que sin esto el extractor nunca veia el
+# .env y todas las NOTAMS_* caian a sus valores por defecto en silencio.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:  # pragma: no cover
+    pass
 # Selenium y webdriver_manager se importan DENTRO de obtener_url_pdf(), no
 # aqui. Solo hacen falta para abrir el portal de la Aerocivil, pero al
 # importarlos arriba cualquier uso del extractor los exigia: en un equipo sin
@@ -160,11 +168,21 @@ def crear_base_temporal() -> sqlite3.Connection:
 def contar_notams(ruta: Path) -> int:
     if not ruta.exists():
         return 0
+    # El "with" de sqlite3 NO cierra la conexion: solo cierra la transaccion.
+    # La conexion quedaba viva sobre la base, y en Windows no se puede
+    # reemplazar un archivo que alguien tiene abierto, asi que el os.replace()
+    # de publicar() fallaba con "Acceso denegado" -en el propio proceso del
+    # extractor, no en el portal- y la extraccion se perdia entera. Hay que
+    # cerrarla a mano.
+    conexion = None
     try:
-        with sqlite3.connect(f"file:{ruta}?mode=ro", uri=True) as c:
-            return c.execute("SELECT COUNT(*) FROM notams").fetchone()[0]
+        conexion = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True)
+        return conexion.execute("SELECT COUNT(*) FROM notams").fetchone()[0]
     except sqlite3.Error:
         return 0
+    finally:
+        if conexion is not None:
+            conexion.close()
 
 
 def publicar(total: int, forzar: bool = False) -> bool:

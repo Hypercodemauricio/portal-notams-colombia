@@ -650,6 +650,17 @@ main { flex: 1; max-width: 1440px; margin: 0 auto; padding: 36px 2rem 3rem; widt
 .data-table td { padding: 15px 20px; font-size: 0.86rem; vertical-align: top; color: var(--text-2); line-height: 1.7; }
 
 .icao-tag { font-family: var(--font-mono); font-weight: 500; color: var(--accent); font-size: 0.92rem; letter-spacing: 0.05em; }
+/* Un NOTAM cuya vigencia ya termino se MARCA, nunca se oculta: que el portal
+   este mostrando informacion caducada es precisamente lo que quien opera
+   necesita ver, y esconderlo daria una lista limpia y mentirosa. */
+.notam-vencido, .cie-vencido {
+    display: inline-block; background: rgba(255,107,107,0.12);
+    color: var(--danger); border: 1px solid rgba(255,107,107,0.25);
+    padding: 2px 9px; border-radius: var(--r-xs);
+    font-family: var(--font-mono); font-size: 0.6rem;
+    letter-spacing: 0.08em; text-transform: uppercase;
+}
+.cie-vencido { padding: 1px 7px; margin-left: 8px; }
 .notam-id-tag { font-family: var(--font-mono); font-weight: 500; color: var(--warn); letter-spacing: 0.04em; }
 .notam-aero-chip {
     display: inline-block; background: var(--warn-a12);
@@ -1880,7 +1891,7 @@ body.light .leaflet-control-attribution { background: rgba(255,255,255,0.85) !im
 
             <div class="geo-sublbl">Estilo de mapa</div>
             <div class="geo-seg">
-              <button class="geo-msbtn on" data-gms="carto" type="button">Oscuro</button>
+              <button class="geo-msbtn on" data-gms="oscuro" type="button">Oscuro</button>
               <button class="geo-msbtn" data-gms="esri" type="button">Satélite</button>
               <button class="geo-msbtn" data-gms="topo" type="button">Topográfico</button>
               <button class="geo-msbtn" data-gms="osm" type="button">Calles</button>
@@ -1932,7 +1943,7 @@ body.light .leaflet-control-attribution { background: rgba(255,255,255,0.85) !im
   <script>
   (function() {
     var GEO_TILES = {
-      carto: { url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', attr:'© CARTO © OSM', opts:{ subdomains:'abcd', maxZoom:20 } },
+      oscuro:{ url:'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', attr:'© Esri', opts:{ maxNativeZoom:16, maxZoom:20 } },
       esri:  { url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr:'© Esri', opts:{ maxZoom:19 } },
       topo:  { url:'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', attr:'© OpenTopoMap', opts:{ maxZoom:17 } },
       osm:   { url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', attr:'© OpenStreetMap', opts:{ maxZoom:19 } }
@@ -2052,7 +2063,7 @@ body.light .leaflet-control-attribution { background: rgba(255,255,255,0.85) !im
       if(geoMapInit) return;
       geoMapInit=true;
       geoMap = L.map('geoMap',{zoomControl:true}).setView([8.8,-75.5],7);
-      geoTileLayer = L.tileLayer(GEO_TILES.carto.url, Object.assign({attribution:GEO_TILES.carto.attr}, GEO_TILES.carto.opts)).addTo(geoMap);
+      geoTileLayer = L.tileLayer(GEO_TILES.oscuro.url, Object.assign({attribution:GEO_TILES.oscuro.attr}, GEO_TILES.oscuro.opts)).addTo(geoMap);
       setTimeout(function(){ geoMap.invalidateSize(); }, 300);
     }
 
@@ -2356,7 +2367,9 @@ body.light .leaflet-control-attribution { background: rgba(255,255,255,0.85) !im
   </div>
 </div>
 <script>
-const AVWX_TOKEN = "9lmNbC4q6YL485yhm-3cUfdX0rP6ksNIRNmPuCBjHl0";
+/* El token de AVWX ya no vive aqui: METAR y TAF se piden a /api/metar y
+   /api/taf, que son los que hablan con avwx.rest desde el servidor. Una
+   credencial en el navegador la puede leer cualquier visitante. */
 
 /* ── Escape de HTML y paso de datos a los botones ──
 
@@ -2506,7 +2519,8 @@ function cieFila(n) {
     + '</div>'
     + '<div>'
       + '<div class="cie-texto">' + cieEsc(n.resumen) + '</div>'
-      + '<div class="cie-id">' + cieEsc(n.id_notam) + vig + '</div>'
+      + '<div class="cie-id">' + cieEsc(n.id_notam) + vig
+        + (n.vencido ? '<span class="cie-vencido">Vencido</span>' : '') + '</div>'
     + '</div>'
     + '<div class="cie-acc">'
       + '<button class="btn-ia" onclick="consultarIA(' + JSON.stringify(n.texto).replace(/"/g, '&quot;') + ')">Analizar</button>'
@@ -2838,7 +2852,6 @@ window.fetchAviationData = async function() {
             'Indicador no válido. Un código OACI son de 2 a 5 letras o dígitos, por ejemplo SKBO.';
         return;
     }
-    const headers = { 'Authorization': `Token ${AVWX_TOKEN}` };
     const antiCache = new Date().getTime();
 
     rawMetar.innerHTML = '';
@@ -2848,7 +2861,7 @@ window.fetchAviationData = async function() {
         rawMetar.innerHTML += `<div id="met-${icao}" style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line);"><strong style="color:#fff;">${esc(icao)}:</strong> Buscando reporte...</div>`;
         rawTaf.innerHTML   += `<div id="taf-${icao}" style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line);"><strong style="color:#fff;">${esc(icao)}:</strong> Buscando pronóstico...</div>`;
 
-        fetch(`https://avwx.rest/api/metar/${encodeURIComponent(icao)}?options=info&format=json&_=${antiCache}`, { headers })
+        fetch(`/api/metar/${encodeURIComponent(icao)}?_=${antiCache}`)
             .then(r => r.json())
             .then(data => {
                 const el = document.getElementById(`met-${icao}`);
@@ -2863,7 +2876,7 @@ window.fetchAviationData = async function() {
                 }
             }).catch(() => { document.getElementById(`met-${icao}`).innerHTML = `<strong style="color:#fff;">${esc(icao)}:</strong> <span style="color:var(--danger);">Error de conexión MET.</span>`; });
 
-        fetch(`https://avwx.rest/api/taf/${encodeURIComponent(icao)}?options=info&format=json&_=${antiCache}`, { headers })
+        fetch(`/api/taf/${encodeURIComponent(icao)}?_=${antiCache}`)
             .then(r => r.json())
             .then(data => {
                 const el = document.getElementById(`taf-${icao}`);
@@ -2948,6 +2961,7 @@ function renderNotamsTable(notamsList) {
             <td>
                 <span class="notam-id-tag">${esc(n.id_notam)}</span><br>
                 <span class="notam-aero-chip" style="margin-top:6px;display:inline-block;">${esc(n.aerodromo)}</span>
+                ${n.vencido ? '<span class="notam-vencido" title="La vigencia de este NOTAM ya termino">Vencido</span>' : ''}
             </td>
             <td class="notam-body">${esc(n.texto)}</td>
             <td style="text-align:right;vertical-align:top;">
@@ -3171,7 +3185,6 @@ window.generarPDF = async function() {
 
     const inputVal  = document.getElementById('icaoInput').value.toUpperCase().trim();
     const icaos     = leerIcaos().validos;
-    const headers   = { 'Authorization': `Token ${AVWX_TOKEN}` };
     const antiCache = new Date().getTime();
 
     try {
@@ -3191,11 +3204,11 @@ window.generarPDF = async function() {
             let metStr = "Estación sin reporte METAR disponible.";
             let tafStr = "Estación sin pronóstico TAF disponible.";
             try {
-                const resM = await fetch(`https://avwx.rest/api/metar/${encodeURIComponent(icao)}?format=json&_=${antiCache}`, { headers });
+                const resM = await fetch(`/api/metar/${encodeURIComponent(icao)}?_=${antiCache}`);
                 if (resM.ok) { const d = await resM.json(); if (d && d.raw) metStr = d.raw; }
             } catch(e) {}
             try {
-                const resT = await fetch(`https://avwx.rest/api/taf/${encodeURIComponent(icao)}?format=json&_=${antiCache}`, { headers });
+                const resT = await fetch(`/api/taf/${encodeURIComponent(icao)}?_=${antiCache}`);
                 if (resT.ok) { const d = await resT.json(); if (d && d.raw) tafStr = d.raw.replace(/\n/g,'<br>'); }
             } catch(e) {}
 

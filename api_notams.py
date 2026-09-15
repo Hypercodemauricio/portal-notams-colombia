@@ -16,19 +16,34 @@ Cambios clave respecto a la version original:
 
 import os
 import re
+import time
 import sqlite3
+from datetime import datetime, timezone
 import logging
 import warnings
 from pathlib import Path
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as EsperaAgotada
 
+import requests
 import google.generativeai as genai
 from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+
+# La configuracion vive en .env, que no se versiona. Hasta ahora solo systemd
+# lo leia (EnvironmentFile), asi que en Windows y en el cron del extractor el
+# archivo se ignoraba en silencio y todo caia a los valores por defecto sin
+# que nada lo dijera. Cargarlo aqui hace que se comporte igual en los tres
+# sitios. El try/except es para que la falta de la libreria no tumbe la API:
+# sin .env el portal sigue arrancando con los valores por defecto.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:  # pragma: no cover
+    pass
 
 import cierres
 import rac
@@ -75,6 +90,25 @@ MODELO_IA = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
 # del visitante colgada indefinidamente: la rueda gira y nunca pasa nada. Con
 # limite, falla rapido y el frontend muestra su mensaje.
 IA_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT", "20"))
+
+# El extractor corre cada 15 minutos. Si la ultima extraccion buena es mas
+# vieja que esto, el portal esta sirviendo un boletin congelado y /health tiene
+# que decirlo: sin esta comprobacion, el servicio respondia "ok" con datos de
+# hace 26 dias y ningun monitor se enteraba. Tres corridas perdidas dan margen
+# para un fallo suelto del portal de la Aerocivil, que es habitual.
+MAX_EDAD_MIN = int(os.getenv("NOTAMS_MAX_EDAD_MIN", "45"))
+
+
+def _edad_minutos(marca):
+    """Minutos transcurridos desde `marca`, que SQLite escribe en UTC."""
+    if not marca:
+        return None
+    try:
+        cuando = datetime.strptime(marca, "%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return None
+    cuando = cuando.replace(tzinfo=timezone.utc)
+    return max(0, int((datetime.now(timezone.utc) - cuando).total_seconds() // 60))
 
 # Un solo hilo suelto por peticion es suficiente y evita que un pico de
 # consultas abra hilos sin control.
@@ -230,6 +264,19 @@ def health():
                     estado["detalle"] = (
                         f"{fila[0]} registro(s) contienen mas de un NOTAM. "
                         f"Corre: python3 extractor.py --reparsear")
+            # Lo ultimo que se comprueba es lo que mas importa: una base
+            # sana pero vieja es el fallo que estuvo un mes sin verse.
+            edad = _edad_minutos(estado.get("ultima_extraccion"))
+            estado["antiguedad_minutos"] = edad
+            if edad is None:
+                estado["estado"] = "degradado"
+                estado["detalle"] = ("La base no dice cuando fue la ultima "
+                                     "extraccion.")
+            elif edad > MAX_EDAD_MIN:
+                estado["estado"] = "degradado"
+                estado["detalle"] = (
+                    f"La ultima extraccion fue hace {edad} minutos (limite "
+                    f"{MAX_EDAD_MIN}). Revisa el cron y logs/extractor.log.")
     except HTTPException as e:
         estado["estado"] = "degradado"
         estado["detalle"] = e.detail
@@ -266,6 +313,7 @@ def obtener_notams(icao: str):
             (codigo,),
         ).fetchall()
 
+    ahora = cierres.ahora_notam()
     return {
         "total": len(filas),
         "datos": [
@@ -274,6 +322,7 @@ def obtener_notams(icao: str):
                 "aerodromo": f["icao_code"],
                 "texto": f["content"],
                 "ultima_actualizacion": f["last_updated"],
+                "vencido": cierres.vencido(f["content"], ahora),
             }
             for f in filas
         ],
@@ -288,10 +337,12 @@ def get_all_notams():
             "SELECT icao_code, notam_id, content FROM notams ORDER BY icao_code, notam_id"
         ).fetchall()
 
+    ahora = cierres.ahora_notam()
     return {
         "total": len(filas),
         "datos": [
-            {"aerodromo": f["icao_code"], "id_notam": f["notam_id"], "texto": f["content"]}
+            {"aerodromo": f["icao_code"], "id_notam": f["notam_id"],
+             "texto": f["content"], "vencido": cierres.vencido(f["content"], ahora)}
             for f in filas
         ],
     }
@@ -306,6 +357,76 @@ def listar_aerodromos():
             "GROUP BY icao_code ORDER BY total DESC"
         ).fetchall()
     return {"datos": [{"aerodromo": f["icao_code"], "total": f["total"]} for f in filas]}
+
+
+# ---------------------------------------------------------------------------
+# METAR / TAF
+# ---------------------------------------------------------------------------
+# Antes el navegador llamaba a avwx.rest directamente, con el token escrito
+# dentro de index.html: visible para cualquier visitante y, estando el repo
+# publicado, para cualquiera en GitHub. La consulta sale ahora del servidor y
+# el token se queda en .env. Mismo criterio que ya se habia aplicado al panel
+# de Coordenadas con /api/analizar_zona.
+AVWX_TOKEN = os.getenv("AVWX_TOKEN", "")
+AVWX_TIMEOUT = int(os.getenv("AVWX_TIMEOUT", "15"))
+
+# Un METAR se emite cada media hora y un TAF cada seis, asi que guardar la
+# respuesta un minuto no cambia nada de lo que ve el operador. Si importa para
+# la cuota: antes cada visitante gastaba sus propias llamadas y ahora salen
+# todas de la misma IP, de modo que un portal con varias personas mirando el
+# mismo aerodromo consumiria una llamada por cada F5.
+AVWX_CACHE_SEG = int(os.getenv("AVWX_CACHE", "60"))
+_avwx_cache: dict = {}
+
+
+def _consultar_avwx(recurso: str, icao: str) -> dict:
+    codigo = icao.strip().upper()
+    if not codigo.isalnum() or not 2 <= len(codigo) <= 5:
+        raise HTTPException(status_code=400, detail="Codigo OACI invalido.")
+
+    if not AVWX_TOKEN:
+        log.warning("AVWX_TOKEN no configurado: %s %s no se consulta.", recurso, codigo)
+        return {"error": "El servicio METAR/TAF no esta configurado."}
+
+    clave = (recurso, codigo)
+    ahora = time.monotonic()
+    guardado = _avwx_cache.get(clave)
+    if guardado and ahora - guardado[0] < AVWX_CACHE_SEG:
+        return guardado[1]
+
+    try:
+        respuesta = requests.get(
+            f"https://avwx.rest/api/{recurso}/{codigo}",
+            params={"options": "info", "format": "json"},
+            headers={"Authorization": f"Token {AVWX_TOKEN}"},
+            timeout=AVWX_TIMEOUT,
+        )
+        datos = respuesta.json()
+    except Exception as e:  # noqa: BLE001
+        log.warning("Fallo la consulta AVWX %s %s: %s", recurso, codigo, e)
+        return {"error": f"No se pudo consultar el {recurso.upper()}."}
+
+    # AVWX responde con un cuerpo de error cuando la estacion no publica
+    # reporte. Se devuelve tal cual y con 200: el portal ya trata "sin campo
+    # raw" como "sin reporte", y asi una estacion sin METAR se sigue viendo
+    # distinta de un fallo de red, que es lo que hay que poder distinguir.
+    if isinstance(datos, dict) and datos.get("raw") and AVWX_CACHE_SEG > 0:
+        if len(_avwx_cache) > 200:
+            _avwx_cache.clear()
+        _avwx_cache[clave] = (ahora, datos)
+    return datos
+
+
+@app.get("/api/metar/{icao}")
+def obtener_metar(icao: str):
+    """METAR mas reciente de un aerodromo."""
+    return _consultar_avwx("metar", icao)
+
+
+@app.get("/api/taf/{icao}")
+def obtener_taf(icao: str):
+    """TAF vigente de un aerodromo."""
+    return _consultar_avwx("taf", icao)
 
 
 @app.get("/api/traducir")
@@ -431,6 +552,8 @@ def listar_cierres(
 
     grupos = {}
     afectados, n_cierres, n_lim, n_fir = set(), 0, 0, 0
+    n_vencidos = 0
+    ahora = cierres.ahora_notam()
 
     for f in filas:
         icao, texto = f["icao_code"], f["content"]
@@ -448,7 +571,11 @@ def listar_cierres(
             continue
 
         ini, fin = cierres.vigencia(texto)
+        caducado = cierres.vencido(texto, ahora)
+        if caducado:
+            n_vencidos += 1
         entrada = {
+            "vencido": caducado,
             "id_notam": f["notam_id"],
             "aerodromo": icao,
             "nombre": cierres.nombre_aerodromo(texto),
@@ -493,6 +620,7 @@ def listar_cierres(
             "limitaciones": n_lim,
             "aerodromos_afectados": len([a for a in afectados if a not in cierres.FIRS]),
             "notams_fir": n_fir,
+            "vencidos": n_vencidos,
         },
         "grupos": ordenados,
     }

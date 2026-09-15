@@ -12,6 +12,7 @@ que solo se ven con los datos delante:
     NOTAMs. Menciona de todo y no restringe nada.
 """
 import re
+from datetime import datetime, timezone
 
 FIRS = {"SKED": "FIR Bogotá", "SKEC": "FIR Barranquilla"}
 
@@ -190,3 +191,31 @@ def vigencia(texto):
     """(inicio, fin) en el formato AAMMDDHHMM del NOTAM, o (None, None)."""
     m = _VIGENCIA.search(texto or "")
     return (m.group(1), m.group(2)) if m else (None, None)
+
+
+def ahora_notam() -> str:
+    """El instante actual en el mismo formato AAMMDDHHMM que usa el NOTAM."""
+    return datetime.now(timezone.utc).strftime("%y%m%d%H%M")
+
+
+def vencido(texto, ahora=None):
+    """
+    True si la vigencia del NOTAM ya termino, False si sigue vigente o es
+    permanente, None si el NOTAM no trae una vigencia reconocible.
+
+    La comparacion es entre cadenas y no entre fechas, a proposito: AAMMDDHHMM
+    es de ancho fijo y va rellena con ceros, asi que ordena igual que la fecha
+    que representa. Convertir a datetime obligaria a acertar con la zona
+    horaria en los dos lados -la vigencia del NOTAM es UTC, la del servidor no
+    tiene por que serlo- y ese es justo el error que haria marcar como vencido
+    un NOTAM que sigue vigente.
+
+    `ahora` se puede pasar para no recalcularlo en cada registro de una lista,
+    y para poder probarlo con un instante fijo.
+    """
+    _, fin = vigencia(texto)
+    if not fin:
+        return None
+    if fin.upper() == "PERM":
+        return False
+    return fin < (ahora or ahora_notam())

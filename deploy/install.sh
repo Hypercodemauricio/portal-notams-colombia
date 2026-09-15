@@ -22,11 +22,22 @@ apt-get install -y -qq python3 python3-pip python3-venv nginx sqlite3 logrotate 
 
 log "2/7  Google Chrome (necesario para el extractor con Selenium)"
 if ! command -v google-chrome >/dev/null; then
+    # El alojamiento gratuito que sale a cuenta para esto es ARM (las Ampere
+    # A1 de Oracle); Google Cloud y AWS son x86. Google publica las dos
+    # arquitecturas, pero con nombres de paquete distintos, asi que fijar
+    # amd64 hacia fallar la instalacion entera justo en el servidor mas
+    # probable.
+    ARQ="$(dpkg --print-architecture)"
+    case "$ARQ" in
+        amd64|arm64) ;;
+        *) echo "    Chrome no tiene paquete para $ARQ."; exit 1 ;;
+    esac
     tmp=$(mktemp -d)
     curl -fsSL -o "$tmp/chrome.deb" \
-        https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+        "https://dl.google.com/linux/direct/google-chrome-stable_current_${ARQ}.deb"
     apt-get install -y -qq "$tmp/chrome.deb"
     rm -rf "$tmp"
+    echo "    Chrome instalado para $ARQ."
 else
     echo "    Chrome ya instalado: $(google-chrome --version)"
 fi

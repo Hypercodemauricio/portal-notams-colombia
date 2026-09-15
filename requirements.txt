@@ -1,6 +1,9 @@
 # Versiones fijadas a partir de las instaladas en el servidor de produccion
 # (Ubuntu 24.04, Python 3.12.3) el 2026-08-16.
 
+# --- Configuracion ---
+python-dotenv==1.2.3
+
 # --- API ---
 fastapi==0.135.1
 uvicorn==0.41.0

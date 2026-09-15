@@ -142,8 +142,10 @@ def probar_api():
     check("rechaza codigo OACI invalido",
           cli.get("/api/notams/A").status_code == 400)
     check("/api/notams_all conserva el formato original",
-          set(cli.get("/api/notams_all").json()["datos"][0])
-          == {"aerodromo", "id_notam", "texto"})
+          {"aerodromo", "id_notam", "texto"}
+          <= set(cli.get("/api/notams_all").json()["datos"][0]))
+    check("/api/notams_all marca la vigencia",
+          "vencido" in cli.get("/api/notams_all").json()["datos"][0])
     check("/api/aerodromos agrupa por codigo",
           cli.get("/api/aerodromos").json()["datos"][0]
           == {"aerodromo": "SKBO", "total": 2})
