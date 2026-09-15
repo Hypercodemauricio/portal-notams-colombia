@@ -28,6 +28,8 @@ llano asistido por IA.
 | `GET` | `/api/notams/{icao}` | NOTAMs de un aeródromo (`SKBO`, `SKRG`, …) |
 | `GET` | `/api/notams_all` | Todos los NOTAMs vigentes |
 | `GET` | `/api/aerodromos` | Aeródromos con NOTAMs y cuántos tiene cada uno |
+| `GET` | `/api/metar/{icao}` | METAR del aeródromo, consultado a AVWX desde el servidor |
+| `GET` | `/api/taf/{icao}` | TAF del aeródromo |
 | `GET` | `/api/traducir?texto=…` | Traduce un METAR/TAF/NOTAM al español con Gemini |
 | `GET` | `/api/cierres` | Aeródromos cerrados o limitados, agrupados por tipo |
 | `GET` | `/api/rac/buscar?q=…` | Busca la palabra clave en el texto de los RAC |
@@ -40,7 +42,9 @@ Documentación interactiva en `/docs` (generada por FastAPI).
 
 ## Instalación en un servidor nuevo
 
-Probado en Ubuntu 22.04 y 24.04.
+Probado en Ubuntu 22.04 y 24.04, en ARM y en x86. La guía completa —con las
+opciones de alojamiento gratuito, el dominio y el HTTPS— está en
+[`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
 
 ```bash
 git clone https://github.com/<usuario>/portal-notams-colombia.git
@@ -78,10 +82,19 @@ python3 rac_indexar.py    # descarga los RAC y arma el buscador de reglamentos
 python3 api_notams.py     # http://127.0.0.1:8000
 ```
 
+En Windows, `PORTAL.bat` hace todo lo anterior con doble clic: crea el entorno
+si falta, arranca el servidor y abre el navegador.
+
 Pruebas (no requieren red):
 
 ```bash
 python3 tests/test_basico.py
+```
+
+Necesitan `httpx` y `reportlab`, que no hacen falta para correr el portal:
+
+```bash
+pip install httpx reportlab
 ```
 
 ---
@@ -98,6 +111,8 @@ relevantes:
 | `NOTAMS_MINIMO` | `50` | Si una extracción devuelve menos NOTAMs, se descarta |
 | `NOTAMS_CAIDA_MAX_PCT` | `50` | Caída máxima tolerada frente a la extracción anterior |
 | `NOTAMS_INTENTOS` | `3` | Reintentos de descarga del PDF |
+| `NOTAMS_MAX_EDAD_MIN` | `45` | Minutos sin extraer tras los que `/health` pasa a degradado |
+| `AVWX_TOKEN` | — | Clave de AVWX para METAR/TAF. Sin ella esa pestaña sale vacía |
 
 ---
 
@@ -152,7 +167,9 @@ python3 extractor.py --force
 │   ├── notams.service       Unidad systemd
 │   ├── nginx-notams.conf    Proxy inverso
 │   └── logrotate-notams     Rotación de logs
+├── PORTAL.bat               Lanzador para Windows: prepara el entorno y abre el portal
 ├── docs/
+│   ├── DESPLIEGUE.md        Publicar en un servidor con dominio y HTTPS
 │   ├── AUDITORIA.md         Diagnóstico del servidor original y cambios aplicados
 │   └── REGLAMENTOS.md       Cómo funciona el buscador de RAC y cómo actualizarlo
 └── tests/
@@ -165,11 +182,15 @@ python3 extractor.py --force
 
 Ver `docs/AUDITORIA.md` para el detalle. Lo más importante:
 
-- **Claves API en el código.** `GEMINI_API_KEY` sigue con un valor por defecto
-  dentro de `api_notams.py`, y el token de AVWX está incrustado en `index.html`,
-  donde es visible para cualquier visitante del portal. **Hay que rotarlas y
-  moverlas a `.env` antes de publicar este repositorio.**
-- Sin HTTPS: el portal responde solo por HTTP.
+- **Las claves van en `.env`,** que no se versiona. Ninguna credencial viaja al
+  navegador: la IA y METAR/TAF se consultan desde el servidor. Si vienes de una
+  instalación anterior, genera un token nuevo de AVWX y revoca el que tuvieras;
+  las versiones viejas del portal lo llevaban en el HTML.
+- **La antigüedad del dato no llega al portal.** `/health` sí la vigila, pero la
+  página no muestra cuándo fue la última extracción.
+- **El aviso de que esto no sustituye la información oficial** está aquí y no en
+  la página. Debería verse en el portal.
+- Sin HTTPS de serie: hay que correr certbot. Ver [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
 
 ---
 

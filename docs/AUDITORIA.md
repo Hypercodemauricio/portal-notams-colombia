@@ -78,15 +78,17 @@ tocarlas a la vez.
 
 ### 5. Claves API expuestas
 
-| Clave | Ubicación | Situación |
-|---|---|---|
-| Google Gemini | `api_notams.py`, línea 13 | En el código fuente del servidor |
-| AVWX | `index.html` (`AVWX_TOKEN`) | **Ya es pública**: se entrega al navegador de cada visitante |
+Las dos claves del portal —Google Gemini y AVWX— estaban en el código, y la de
+AVWX además se entregaba al navegador de cada visitante.
 
-**No corregido — decisión del usuario, pendiente antes de publicar en GitHub.**
-Ambas ya se pueden sobrescribir con variables de entorno sin tocar código, pero
-los valores originales siguen presentes como respaldo. El token de AVWX debería
-además pasar a un endpoint del backend, para que deje de viajar al cliente.
+**Corregido.** Ambas viven ahora en `.env`, que no se versiona y que el propio
+código carga. Ninguna llega al cliente: METAR y TAF se consultan a través de
+`/api/metar/{icao}` y `/api/taf/{icao}`, igual que ya se hacía con el análisis
+de zona.
+
+Una credencial que estuvo en el frontend no se arregla moviéndola de sitio.
+Quien venga de una instalación anterior tiene que generar un token nuevo en
+AVWX y revocar el viejo.
 
 ### 6. Logs sin rotación
 

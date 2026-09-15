@@ -29,6 +29,12 @@ venv/
 env/
 *.egg-info/
 
+# ---- Empaquetados del propio proyecto ----
+# Un zip del repo dentro del repo se queda obsoleto al primer commit y arrastra
+# copias viejas de archivos que ya se corrigieron, secretos incluidos.
+portal-notams-colombia.zip
+*.zip
+
 # ---- Copias de seguridad y basura ----
 *.bak
 *.orig
