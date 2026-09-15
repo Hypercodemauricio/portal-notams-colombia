@@ -47,6 +47,39 @@ Hace falta una máquina virtual de verdad.
 
 ---
 
+## Crear la máquina en Google Cloud
+
+Estos pasos son los únicos que hay que hacer a mano, en la consola web.
+
+**1. Cuenta.** [console.cloud.google.com](https://console.cloud.google.com/).
+Google pide una tarjeta para verificar identidad; el nivel gratuito no cobra,
+pero la tarjeta es obligatoria. Crea un proyecto nuevo.
+
+**2. La instancia.** *Compute Engine → VM instances → Create instance*.
+
+| Campo | Valor | Por qué |
+|---|---|---|
+| Región | `us-central1`, `us-west1` o `us-east1` | **Solo estas tres son gratis.** En cualquier otra se factura. |
+| Tipo | `e2-micro` | El único incluido en el nivel gratuito permanente. |
+| Disco | 30 GB, *Standard persistent disk* | 30 GB es el tope gratuito. No elijas SSD: ese sí se cobra. |
+| Imagen | Ubuntu 24.04 LTS | Es sobre la que está probado el instalador. |
+| Firewall | marca *Allow HTTP* y *Allow HTTPS* | Abre los puertos 80 y 443. |
+
+**3. Entrar.** El botón **SSH** de la consola abre una terminal en el navegador.
+No hace falta instalar nada en tu equipo.
+
+> **Sobre el gratis:** es una `e2-micro` al mes, 30 GB de disco y **1 GB de
+> salida de datos mensual**. El portal manda unos 550 KB en la primera visita
+> (el vídeo de fondo es casi todo) y mucho menos en las siguientes, porque se
+> cachea 30 días. Da para unas 1.800 visitas nuevas al mes: de sobra para un
+> equipo, pero tenlo presente si el enlace se difunde.
+
+Con 1 GB de RAM, Chrome headless se queda corto y el kernel lo mata a mitad de
+la extracción. El instalador lo detecta y crea 2 GB de swap solo; no tienes que
+hacer nada, pero por eso la primera extracción tarda más de lo normal.
+
+---
+
 ## Instalación
 
 Probado en Ubuntu 22.04 y 24.04, en ARM y en x86.
