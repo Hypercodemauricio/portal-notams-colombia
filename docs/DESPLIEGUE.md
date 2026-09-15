@@ -41,9 +41,28 @@ Hace falta una máquina virtual de verdad.
 
 | Opción | Gratis | Notas |
 |---|---|---|
-| **Oracle Cloud Always Free** | permanente | 2 OCPU / 12 GB ARM. Lo que recomendamos. |
-| **Google Cloud `e2-micro`** | permanente | x86, 1 GB de RAM: necesita swap para Chrome. |
+| **Google Cloud `e2-micro`** | permanente | 1 GB de RAM y 1 GB de salida al mes. Va justo, pero no desaparece. **Lo que usamos.** |
+| Oracle Cloud Always Free | permanente | 12 GB de RAM y 10 TB de salida, pero ver abajo. |
 | AWS `t3.micro` | 12 meses | Después se paga. |
+
+### Por qué no Oracle, si da doce veces más memoria
+
+Porque es probable que te apague el servidor. Oracle considera **inactiva** una
+instancia Always Free si durante 7 días seguidos el percentil 95 de CPU está
+por debajo del 20 %, la red por debajo del 20 % y —en las ARM— la memoria por
+debajo del 20 %. Cumplidas las tres, la recupera.
+
+Este portal encaja en ese perfil: en una máquina de 12 GB, el 20 % de memoria
+son 2,4 GB y la API gasta unos pocos cientos de megas; la CPU solo se mueve los
+cuarenta segundos que corre el extractor cada cuarto de hora; y una herramienta
+interna no genera tráfico. Se puede esquivar dejando un generador de carga
+artificial, pero eso es quemar CPU para engañar a un detector.
+
+Se suma que en junio de 2026 Oracle recortó el nivel gratuito a la mitad sin
+anunciarlo y apagó instancias, y que la capacidad ARM suele estar agotada.
+
+Google Cloud va más justa de recursos —de ahí el swap y el límite de salida—
+pero no se desvanece. Para una herramienta de trabajo eso pesa más.
 
 ---
 
