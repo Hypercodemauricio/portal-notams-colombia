@@ -112,7 +112,21 @@ después**.
 
 > Si sale **«Out of capacity»**, no es un error tuyo: la capacidad ARM se agota
 > a menudo. Prueba en otro dominio de disponibilidad, en otra región o más
-> tarde.
+> tarde. A veces hay que insistir varias veces.
+
+Tres cosas que se pasan por alto y cuestan rehacer la máquina:
+
+- **Elige el shape antes que la imagen.** Al seleccionar Ampere, la lista de
+  imágenes se filtra a las compatibles con ARM. Al revés se acaba con una
+  imagen x86 que no arranca en ese shape.
+- **El shape tiene que decir «Always Free eligible».** Una cuenta nueva empieza
+  en Free Trial con 300 USD de crédito, y durante 30 días la consola deja crear
+  lo que sea: todo lo que no sea Always Free **se apaga al terminar la prueba**.
+- **Descarga la clave privada antes de pulsar Create.** Oracle la ofrece una
+  sola vez. Sin ella no se entra, y la única salida es borrar la instancia.
+
+Y en la sección de red, comprueba que *Assign a public IPv4 address* esté en
+**Yes**. Sin IP pública no se llega al portal desde fuera.
 
 **3. Abrir los puertos.** Dos sitios, y hay que hacer los dos:
 
