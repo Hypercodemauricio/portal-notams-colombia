@@ -41,61 +41,87 @@ Hace falta una máquina virtual de verdad.
 
 | Opción | Gratis | Notas |
 |---|---|---|
-| **Google Cloud `e2-micro`** | permanente | 1 GB de RAM y 1 GB de salida al mes. Va justo, pero no desaparece. **Lo que usamos.** |
-| Oracle Cloud Always Free | permanente | 12 GB de RAM y 10 TB de salida, pero ver abajo. |
+| **Oracle Cloud Always Free** | permanente | 12 GB de RAM y 10 TB de salida. Solo verificación de tarjeta. **Lo que usamos.** |
+| Google Cloud `e2-micro` | permanente | 1 GB de RAM y 1 GB de salida. En Colombia exige un prepago de 100.000 COP. |
 | AWS `t3.micro` | 12 meses | Después se paga. |
 
-### Por qué no Oracle, si da doce veces más memoria
+### Oracle y la inactividad: qué esperar
 
-Porque es probable que te apague el servidor. Oracle considera **inactiva** una
-instancia Always Free si durante 7 días seguidos el percentil 95 de CPU está
-por debajo del 20 %, la red por debajo del 20 % y —en las ARM— la memoria por
-debajo del 20 %. Cumplidas las tres, la recupera.
+Oracle marca como **inactiva** una instancia Always Free si durante 7 días
+seguidos se cumplen las tres cosas a la vez: percentil 95 de CPU por debajo del
+20 %, red por debajo del 20 % y —solo en las ARM— memoria por debajo del 20 %.
 
-Este portal encaja en ese perfil: en una máquina de 12 GB, el 20 % de memoria
-son 2,4 GB y la API gasta unos pocos cientos de megas; la CPU solo se mueve los
-cuarenta segundos que corre el extractor cada cuarto de hora; y una herramienta
-interna no genera tráfico. Se puede esquivar dejando un generador de carga
-artificial, pero eso es quemar CPU para engañar a un detector.
+Este portal encaja en ese perfil. La de memoria es la que no hay forma de
+esquivar: en una ARM de 12 GB el umbral son 2,4 GB, y la API gasta unos 400 MB.
+Ni pidiendo la más pequeña, de 6 GB, se llega.
 
-Se suma que en junio de 2026 Oracle recortó el nivel gratuito a la mitad sin
-anunciarlo y apagó instancias, y que la capacidad ARM suele estar agotada.
+**Lo que pasa entonces no es tan grave como suena.** Oracle no borra nada:
+avisa por correo y **apaga** la instancia una semana después del aviso. El disco
+y los datos quedan intactos y se vuelve a encender desde la consola. Son unos 14
+días desde que empieza a estar ociosa, con notificación de por medio.
 
-Google Cloud va más justa de recursos —de ahí el swap y el límite de salida—
-pero no se desvanece. Para una herramienta de trabajo eso pesa más.
+Al encenderla, todo vuelve solo. El portal servirá datos viejos unos minutos,
+pero eso se ve: `/health` estará en `degradado` y los NOTAM saldrán con la
+etiqueta `VENCIDO` hasta la siguiente extracción, que llega en menos de 15
+minutos.
+
+El único escenario incómodo es que la documentación condiciona el reencendido a
+que **el shape siga disponible en la región**, y la capacidad ARM de Oracle se
+agota a menudo. Es poco probable, pero es la razón real para no confiarse.
+
+### Cómo quitarse el problema del todo
+
+La política está acotada a las cuentas Always Free: *«Idle **Always Free**
+compute instances may be reclaimed by Oracle»*. **Convertir la cuenta a Pay As
+You Go la desactiva**, y los recursos Always Free se siguen usando sin coste. Es
+lo que recomienda el propio soporte de Oracle.
+
+El precio honesto: con Pay As You Go hay una tarjeta activa que **sí puede
+cobrar** si algún día se crea algo fuera de los límites gratuitos. Con Always
+Free eso es imposible por construcción. Se cambia «me la pueden apagar» por «me
+pueden cobrar si me equivoco».
+
+Si se hace, dos precauciones que no cuestan nada: crear solo recursos que la
+consola marque como *Always Free eligible*, y poner una alerta de presupuesto en
+1 USD para enterarse el día que algo empiece a facturar.
+
+**Recomendación:** empezar en Always Free. Si llega el aviso de inactividad, a
+esas alturas ya se sabrá si la herramienta se ganó su sitio; si se lo ganó, se
+convierte a Pay As You Go ese día.
 
 ---
 
-## Crear la máquina en Google Cloud
+## Crear la máquina en Oracle Cloud
 
 Estos pasos son los únicos que hay que hacer a mano, en la consola web.
 
-**1. Cuenta.** [console.cloud.google.com](https://console.cloud.google.com/).
-Google pide una tarjeta para verificar identidad; el nivel gratuito no cobra,
-pero la tarjeta es obligatoria. Crea un proyecto nuevo.
+**1. Cuenta.** [cloud.oracle.com/free](https://www.oracle.com/cloud/free/).
+Pide una tarjeta para verificar identidad: hace una retención temporal de
+alrededor de un dólar que se libera sola. No hay prepago. Elige como *home
+region* una cercana —São Paulo o Santiago— porque **no se puede cambiar
+después**.
 
-**2. La instancia.** *Compute Engine → VM instances → Create instance*.
+**2. La instancia.** *Compute → Instances → Create instance*.
 
 | Campo | Valor | Por qué |
 |---|---|---|
-| Región | `us-central1`, `us-west1` o `us-east1` | **Solo estas tres son gratis.** En cualquier otra se factura. |
-| Tipo | `e2-micro` | El único incluido en el nivel gratuito permanente. |
-| Disco | 30 GB, *Standard persistent disk* | 30 GB es el tope gratuito. No elijas SSD: ese sí se cobra. |
-| Imagen | Ubuntu 24.04 LTS | Es sobre la que está probado el instalador. |
-| Firewall | marca *Allow HTTP* y *Allow HTTPS* | Abre los puertos 80 y 443. |
+| Shape | `VM.Standard.A1.Flex`, 1 OCPU y 6 GB | Sobra para el portal y deja margen para Chrome. Tiene que decir *Always Free eligible*. |
+| Imagen | Ubuntu 24.04 (aarch64) | Es ARM; el instalador lo detecta solo. |
+| Disco | el de por defecto (~47 GB) | El tope gratuito son 200 GB entre todos. |
+| Clave SSH | descarga la privada | Sin ella no vuelves a entrar. |
 
-**3. Entrar.** El botón **SSH** de la consola abre una terminal en el navegador.
-No hace falta instalar nada en tu equipo.
+> Si sale **«Out of capacity»**, no es un error tuyo: la capacidad ARM se agota
+> a menudo. Prueba en otro dominio de disponibilidad, en otra región o más
+> tarde.
 
-> **Sobre el gratis:** es una `e2-micro` al mes, 30 GB de disco y **1 GB de
-> salida de datos mensual**. El portal manda unos 550 KB en la primera visita
-> (el vídeo de fondo es casi todo) y mucho menos en las siguientes, porque se
-> cachea 30 días. Da para unas 1.800 visitas nuevas al mes: de sobra para un
-> equipo, pero tenlo presente si el enlace se difunde.
+**3. Abrir los puertos.** Dos sitios, y hay que hacer los dos:
 
-Con 1 GB de RAM, Chrome headless se queda corto y el kernel lo mata a mitad de
-la extracción. El instalador lo detecta y crea 2 GB de swap solo; no tienes que
-hacer nada, pero por eso la primera extracción tarda más de lo normal.
+- En la consola: *Networking → Virtual Cloud Networks → tu VCN → Security Lists*
+  → añade reglas de entrada para los puertos **80** y **443** desde `0.0.0.0/0`.
+- En la máquina, porque la imagen de Ubuntu trae iptables cerrado. Los comandos
+  están más abajo, en «Abrir el puerto».
+
+**4. Entrar.** `ssh -i tu-clave.key ubuntu@LA_IP`
 
 ---
 
@@ -155,11 +181,9 @@ es el mismo archivo.
 
 ## Abrir el puerto
 
-En Oracle y en Google Cloud no basta con el firewall de Ubuntu: hay que abrir
-el puerto también en la consola web del proveedor (*Security List* /
-*Firewall rules*), para los puertos **80** y **443**.
-
-En Oracle, además, la imagen de Ubuntu trae iptables cerrado por defecto:
+No basta con el firewall de Ubuntu: hay que abrir el puerto también en la
+*Security List* de la consola, como se indica arriba. Y además, porque la imagen
+de Ubuntu de Oracle trae iptables cerrado por defecto:
 
 ```bash
 sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
